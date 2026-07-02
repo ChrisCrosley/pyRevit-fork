@@ -301,6 +301,11 @@ Relevance to this plan:
 
 ## 7. Proposed Direction: C# UI Layer + Thin Python API (Option B)
 
+> **Framing:** "C# UI layer" is shorthand. In practice this is **C#-assisted, mostly-Python** —
+> most of `forms` stays pure Python under pythonnet, and C# is used surgically for a few
+> high-leverage primitives. See §7.10 for the verified breakdown of what needs C# and what does
+> not.
+
 ### 7.1 The proven precedent: `ScriptOutput` / `PyRevitOutputWindow`
 The output console is **already** a C#-hosted WPF window (`ScriptOutput.cs`) driven from Python
 via a thin wrapper (`output/__init__.py`, forwarding through `__getattr__`). Scripts call
@@ -571,6 +576,52 @@ Planning notes:
   any not-yet-ported dialog (no forced migration); the `PyRevitCPythonNotSupported` errors are a
   precise, actionable coverage signal (could point at a live coverage matrix); and new elements
   are testable side-by-side against `_ipy`.
+
+### 7.10 How much actually needs C# (the hybrid reality)
+"C# UI layer" overstates it. Verified against `_ipy.py`, **most of `forms` can stay pure Python**
+under pythonnet, and C# is warranted only for a small, high-leverage subset. The realistic
+recommendation is **C#-assisted, mostly-Python**, not a wholesale C# rewrite.
+
+**Stays pure Python — no C# (native dialogs / logic / orchestration):**
+
+| Element | Backing (verified in `_ipy.py`) |
+|---|---|
+| `alert`, `alert_ifnot`, `inform_wip` | `UI.TaskDialog` (Revit native) |
+| `pick_file`, `save_file` | `Forms.OpenFileDialog` / `SaveFileDialog` |
+| `pick_folder` | `CPDialogs.CommonOpenFileDialog` / `Forms.FolderBrowserDialog` |
+| `ask_for_color` | `Forms.ColorDialog` |
+| `pick_excel_file`, `save_excel_file` | wrappers over the above |
+| `toast`, `show_balloon` | native toast / InfoCenter |
+| `check_*` validators | pure logic, no UI |
+| `select_*` / `ask_*` orchestration | thin Python delegating to the above/below |
+
+These are `.NET` calls with no XAML-into-self and no Python-object binding — they port directly
+(only the §6.2 idiom cleanups). `alert` and `pick_file` alone are among the most-used forms
+functions and need zero C#.
+
+**Needs the WPF-host layer — mostly still Python; C# only where it pays:**
+
+| Element(s) | What it needs | Pure-Python viable? | C# leverage |
+|---|---|---|---|
+| `ask_for_string`, `ask_for_date`, `ask_for_number_slider` | small window, imperative control read | ✓ yes | low |
+| `SelectFromList`, `CommandSwitchWindow`, `ask_for_one_item`, underlying `select_*` | data-bound list | ✓ via `DataTable` | medium (nicer binding) |
+| `SearchPrompt` | filtered list + keyboard handling | ✓ mostly | low–medium |
+| `ProgressBar`, `WarningBar`, `TemplatePromptBar` | **modeless** window + threading + `ExternalEvent` | ✗ tricky (GIL, `__namespace__`) | **high** |
+| dockable panels (`WPFPanel`, register/get/open/close/toggle) | modeless dockable + API context | ✗ tricky | **high** |
+| `WPFWindow` / `WPFPanel` (user-subclassable base) | XAML-into-self, auto-wire, ownership, theming | partial (composition works, verbose) | **high** (ergonomics + plumbing once) |
+| reactive / MVVM custom dialogs | declarative `{Binding}` to Python view models | ✗ | **high** (`BindableModel`) |
+
+**The two C# primitives worth building** (everything else calls into them or stock .NET):
+1. **Window-host / plumbing base** — writes the hardest Revit-host mechanics *once*: modeless
+   `ExternalEvent`/`IExternalEventHandler` marshaling, window ownership/parenting to the Revit
+   window, and MahApps/dark-theme resources. High leverage — every modeless dialog needs it.
+2. **`BindableModel` / bindable collections** — clean declarative MVVM binding to Python-driven
+   data; the one thing pure pythonnet can't do gracefully (`DataTable` covers tabular cases
+   without it).
+
+**Consequence for sequencing:** Tiers 0–3 of §7.9 need **no C# at all**; C# arrives late and
+surgically at the modeless/`ProgressBar` tier (→ the host base) and reactive custom dialogs
+(→ `BindableModel`). It is a dial, not a binary — pick how much ergonomics to buy.
 
 ---
 
