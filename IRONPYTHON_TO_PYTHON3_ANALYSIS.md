@@ -269,6 +269,174 @@ find named controls, attach handlers, read/write control state, and dump rows in
 to your data — covered by `BindableModel`/`DataTable`. You would reach for hand-written C# only
 for a heavily-typed, logic-rich ViewModel, and even that is optional.
 
+### 7.7 Concrete code comparison
+
+All snippets below are **illustrative** — the current-state ones reflect real pyRevit APIs;
+the Option A / Option B ones sketch the shape each approach would take. The point is the
+*developer experience*, not copy-pasteable code.
+
+**Note on built-in dialogs:** for callers of built-in dialogs (`forms.alert`,
+`forms.SelectFromList`, ...), Options A and B look **identical** — the Python caller API is
+preserved in both, and the difference is purely internal (Option A reimplements each dialog in
+Python; Option B in C#). The developer-visible divergence appears when **authoring a custom
+dialog**, so the scenario below is a custom live-preview dialog (a batch-renumber tool, modeled
+on the existing `ReValue` button).
+
+#### Baseline — today, on IronPython (works)
+```python
+#! (ironpython — default)
+from pyrevit import forms
+
+class RenumberWindow(forms.WPFWindow):
+    def __init__(self, xaml):
+        forms.WPFWindow.__init__(self, xaml)     # loads XAML *into self*, auto-wires controls
+        self.preview_dg.ItemsSource = self._rows  # bind grid directly to Python row objects
+
+    def on_prefix_changed(self, sender, args):    # handler named in XAML resolves to this method
+        self._recompute()
+        self.preview_dg.Items.Refresh()
+
+RenumberWindow("renumber.xaml").show_dialog()
+```
+```xml
+<!-- renumber.xaml -->
+<TextBox  x:Name="prefix_tb" TextChanged="on_prefix_changed"/>
+<DataGrid x:Name="preview_dg">
+  <DataGrid.Columns>
+    <DataGridTextColumn Binding="{Binding new_number}"/>   <!-- binds to Python object attr -->
+  </DataGrid.Columns>
+</DataGrid>
+```
+Three IronPython-only conveniences make this terse: XAML loads *into* `self`, `x:Name` controls
+auto-appear as `self.<name>`, and `{Binding}` resolves against Python objects. Under
+`#! python3` today this class raises `PyRevitCPythonNotSupported` at construction.
+
+#### Option A — the same custom dialog, reimplemented in Python on pythonnet
+```python
+#! python3
+from System.Windows.Markup import XamlReader
+from System.IO import File
+
+class RenumberWindow:                              # composition, not inheritance
+    def __init__(self, xaml_path):
+        with File.OpenRead(xaml_path) as fs:
+            self.window = XamlReader.Load(fs)      # returns a NEW object graph (not self)
+        # no auto-wiring — every control fetched by name:
+        self.prefix_tb  = self.window.FindName("prefix_tb")
+        self.preview_dg = self.window.FindName("preview_dg")
+        # events wired by hand (XAML handler names do NOT resolve to Python methods):
+        self.prefix_tb.TextChanged += self.on_prefix_changed
+        # {Binding} to Python objects does NOT work under pythonnet -> feed .NET-visible rows:
+        self.preview_dg.ItemsSource = to_datatable(self._rows).DefaultView
+
+    def on_prefix_changed(self, sender, args):
+        self._recompute()
+        self.preview_dg.ItemsSource = to_datatable(self._rows).DefaultView   # re-push
+
+    def show(self):
+        self.window.ShowDialog()
+```
+Every custom-dialog author must now: use composition, `FindName` each control, wire events
+manually, and convert Python data to a `DataTable` (or hand-roll an `ICustomTypeDescriptor`
+adapter) because binding to Python objects is dead. This boilerplate repeats in every extension.
+
+#### Option B — the same dialog, engine-agnostic, via pyRevit's C# layer
+
+*MVVM path (`forms.BindableModel`):*
+```python
+#! python3   (identical code runs on IronPython too)
+from pyrevit import forms
+
+class RenumberVM(forms.BindableModel):
+    def __init__(self, sheets):
+        super().__init__()
+        self._sheets = sheets
+        self.prefix  = "A"                     # assignment auto-raises PropertyChanged
+        self.preview = self.observable([])     # .NET ObservableCollection
+        self.apply_cmd = self.command(self._apply, can_execute=self._valid)
+        self._recompute()
+
+    def _on_property_changed(self, name):      # react to input changes
+        if name == "prefix":
+            self._recompute()
+
+    def _recompute(self):
+        self.preview.reset(forms.BindableRow(r)
+                           for r in renumber(self._sheets, self.prefix))
+
+    def _valid(self):  return not collisions(self.preview)   # drives Apply enable/disable
+    def _apply(self):  ...; self.close()
+
+forms.WPFWindow("renumber.xaml", context=RenumberVM(sheets)).show_dialog()
+```
+```xml
+<!-- renumber.xaml — no code-behind, no FindName, no manual wiring -->
+<TextBox  Text="{Binding prefix, UpdateSourceTrigger=PropertyChanged}"/>
+<DataGrid ItemsSource="{Binding preview}"/>
+<Button   Content="Apply" Command="{Binding apply_cmd}"/>
+```
+
+*No-ViewModel path (`forms.DataGrid`) — when you just need to show/edit a table:*
+```python
+#! python3
+from pyrevit import forms
+
+grid = forms.DataGrid(title="Renumber Sheets", columns=["sheet", "old", "new"])
+grid.set_data(rows=[{"sheet": s.name, "old": s.number, "new": proposed[s]}
+                    for s in sheets])          # bulk load = one boundary crossing
+if grid.show_dialog():
+    for row in grid.rows:                       # read back edited values
+        apply_number(row["sheet"], row["new"])
+```
+
+#### Where Option B's cost lives — the C# side (authored once)
+The ergonomics above depend on a small amount of C# pyRevit ships. `BindableModel` is a thin
+Python wrapper (same forwarding trick as `PyRevitOutputWindow`) over a C# core that WPF binding
+can see:
+```csharp
+// Illustrative. The crux is exposing dynamic members to WPF's binding engine
+// (via DynamicObject / ICustomTypeDescriptor) and raising change notifications.
+public class BindableCore : DynamicObject, INotifyPropertyChanged {
+    private readonly Dictionary<string, object> _bag = new();
+    public event PropertyChangedEventHandler PropertyChanged;
+
+    public void Set(string name, object value) {
+        _bag[name] = value;
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));  // UI updates
+    }
+    public object Get(string name) => _bag.TryGetValue(name, out var v) ? v : null;
+
+    public ICommand Command(Func<bool> canExec, Action exec) => new RelayCommand(canExec, exec);
+}
+```
+```python
+# Thin Python wrapper — mirrors output/__init__.py's PyRevitOutputWindow forwarding
+class BindableModel(object):
+    def __init__(self):
+        object.__setattr__(self, "_core", runtime.BindableCore())
+    def __setattr__(self, name, value):     # self.prefix = x  -> raises PropertyChanged
+        if name.startswith("_"):
+            object.__setattr__(self, name, value)
+        else:
+            self._core.Set(name, value)
+    def __getattr__(self, name):
+        return self._core.Get(name)
+```
+This C# lives in one place and serves **every** engine, versus Option A's adapter logic that
+each Python author reinvents.
+
+#### Developer-experience summary
+| Concern | Baseline (IPy) | Option A (CPython, Python) | Option B (C# layer) |
+|---|---|---|---|
+| Works under `#! python3` | ✗ | ✓ | ✓ |
+| Works under IronPython | ✓ | (n/a) | ✓ (one codebase) |
+| XAML load model | into `self` | `XamlReader` + `FindName` | into window (C#-handled) |
+| Control access | auto `self.<name>` | manual `FindName` per control | auto / `FindName` (C#-handled) |
+| Event wiring | XAML handler names | manual `+=` in Python | `{Binding}` command / handlers |
+| Bind to your data | Python objects (native) | must convert to `DataTable`/adapter | `BindableModel`/`BindableRow` |
+| Boilerplate location | none | repeated per extension | written once in C# |
+| "Show a table" quick path | `SelectFromList` | hand-rolled | `forms.DataGrid` |
+
 ---
 
 ## 8. Decision Factors
