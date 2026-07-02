@@ -519,6 +519,59 @@ each Python author reinvents.
 | Boilerplate location | none | repeated per extension | written once in C# |
 | "Show a table" quick path | `SelectFromList` | hand-rolled | `forms.DataGrid` |
 
+### 7.8 The C# forms layer is a convenience, not a gate
+Under pythonnet 3 users can build **arbitrary WPF entirely in Python** without `pyrevit.forms`
+(`clr.AddReference("PresentationFramework")` → `XamlReader.Load` → `FindName` → `+=` handlers →
+`ShowDialog()`). The C# API does not lock anyone in; it coexists with hand-rolled WPF (a single
+command can use both). What `forms` *buys* is absorbing two kinds of baggage authors would
+otherwise re-solve every time:
+- **The general pythonnet-WPF tax** (§7.7 / §6.5): composition + `FindName`, manual event
+  wiring, no `{Binding}` to Python objects, `super().__init__()`, `__namespace__` for interfaces.
+- **Revit-host concerns** — window ownership/parenting to the Revit window
+  (`WindowInteropHelper` + `AdWindows.ComponentManager.ApplicationWindow`), assembly references
+  (`PresentationFramework`/`PresentationCore`/`WindowsBase`/`System.Xaml`, incl. the .NET 8
+  Desktop runtime on Revit 2025+), MahApps + pyRevit dark-theme resources, and — the sharpest
+  edge — **modeless windows that call the Revit API**, which must marshal back via
+  `ExternalEvent`/`IExternalEventHandler` (pythonnet needs the `__namespace__` interface trick +
+  GIL care). Modal dialogs are simple DIY; modeless-with-API-callbacks is genuinely tricky.
+
+So the value proposition is "paved road + open dirt road": `forms` saves ~95% of authors from
+re-implementing ownership, `ExternalEvent` marshaling, theming, and binding adapters, while the
+raw-pythonnet escape hatch stays fully available for power users and exotic UI.
+
+### 7.9 Incremental migration path
+The port is **not** a 4,100-line big bang. The existing `_cpy.py` backend + the module-level
+`__getattr__` catch-all in `forms/__init__.py` are already an incremental scaffold: implement
+one symbol (real code in `_cpy.py`, or a thin wrapper forwarding to a new C# element) and add
+it to `__all__`; everything not yet done keeps raising a precise
+`PyRevitCPythonNotSupported("pyrevit.forms.X")`. Each release moves a few functions from stub to
+real with nothing else breaking.
+
+Suggested ordering (easy → hard):
+
+| Tier | Elements | Effort | Notes |
+|---|---|---|---|
+| 0 | `check_*` validators | trivial | pure logic, no WPF |
+| 1 | `alert`, `pick_file`/`pick_folder`/`save_file`, `toast`, `show_balloon` | easy | native dialogs; no XAML/binding |
+| 2 | `SelectFromList`, `CommandSwitchWindow`, `ask_for_one_item`, `select_*` family | medium | data-bound list → `DataGrid`/`DataTable` |
+| 3 | `ask_for_string`/`_date`/`_number_slider`/`_color` | medium | small value-input windows |
+| 4 | `ProgressBar`, dockable panels (`WPFPanel`, open/close/toggle) | harder | modeless + threading + `ExternalEvent` |
+| 5 | `WPFWindow`/`WPFPanel` base classes | hardest | user-subclassable custom-dialog API |
+
+Planning notes:
+- **Built-in dialogs are cleanly incremental; the subclassable base is one deliberate step.**
+  Leaf dialogs (Tiers 0–4) are independent, added one at a time. `WPFWindow`/`WPFPanel` (Tier 5)
+  is infrastructure users subclass — it can't be half-shipped. Under **Option B this is easier**:
+  built-ins are C# and need no Python-subclassable base, so Tiers 0–4 ship *without* exposing
+  `WPFWindow`, and the custom-authoring API (`forms.WPFWindow`/`BindableModel`) becomes a
+  distinct final milestone.
+- **Hold parity with `_ipy.py`.** Keep public signatures and observable behavior identical
+  across engines; `_ipy.py` is the reference. A small per-element parity test is worthwhile.
+- **Low risk by construction.** Per-button engine selection lets authors keep IronPython for
+  any not-yet-ported dialog (no forced migration); the `PyRevitCPythonNotSupported` errors are a
+  precise, actionable coverage signal (could point at a live coverage matrix); and new elements
+  are testable side-by-side against `_ipy`.
+
 ---
 
 ## 8. Decision Factors
