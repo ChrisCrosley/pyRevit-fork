@@ -99,7 +99,35 @@ Critical consequences:
 33 packages, almost entirely pure-Python (only `sqlalchemy` carries optional C-extension artifacts, with a pure-Python fallback). Groups: HTTP/web (`requests`, `urllib3`, `werkzeug`, `websocket`, `slackclient`), data/files (`xlrd`, `xlsxwriter`, `sqlalchemy`, `bson`, `sorted*`), parsing/util (`pyparsing`, `docopt`, `pytz`), and **Python-2 backports** (`six`, `enum`, `pathlib`/`pathlib2`, `scandir`, `importlib_resources`, `unicodecsv`). The backports are the tell-tale of an IronPython-2.7 target.
 
 ### 4.2 Inventory: `pyrevitlib/` (first-party)
-Five packages: `pyrevit` (~200 files; sub-packages `coreutils`, `revit`, `interop`, `routes`, `runtime`, `loader`, `forms`, `output`, `telemetry`, ...), plus `rpw`, `rpws`, `rjm`, `rsparam`.
+Five packages. Status legend for the PythonNet-3 column: **Compatible** = engine-agnostic today (pure Python, or .NET calls that work identically under pythonnet); **Syntax-only** = bounded Py2-residual / §6.5 idiom cleanup; **Shim** = needs the `framework.py` wrapper for `clr.AddReferenceToFileAndPath`; **Idiom port** = bounded marshaling fixes (§6.5 checklist); **Major work** = redesign required; **Superseded** = replaced by the C# loader path; **Frozen legacy** = kept for the legacy engine only, not ported. Statuses are assessments from this document's findings, not test results.
+
+| Package   | Size       | What it is | PythonNet-3 status |
+| --------- | ---------- | ---------- | ------------------ |
+| `pyrevit` | ~200 files | The first-party API every pyRevit script imports | Mixed — see subpackage table below |
+| `rpw`     | ~6,600 lines | Vendored *revitpythonwrapper*: Revit API wrapper + `FlexForm` UI | **Frozen legacy** (§4.7) — `rpw.ui.forms` hard-fails; rest untested |
+| `rpws`    | 5 files    | Revit Server REST client, pure HTTP | **Compatible** (no .NET usage) |
+| `rjm`     | ~890 lines | Revit Journal Maker — composes Revit journal files to drive Revit unattended (headless batch automation) | **Compatible** (pure Python, no .NET usage; no in-repo consumers) |
+| `rsparam` | 236 lines  | Reader/auditor for Revit shared-parameter files (search, duplicate detection) | **Compatible** (pure Python, no .NET usage; no in-repo consumers) |
+
+`pyrevit` subpackages and top-level modules (file counts and coupling verified on this branch):
+
+| Subpackage | Files | What it does | PythonNet-3 status |
+| ------------ | -----:| ------------ | ------------------ |
+| `coreutils`  | 46 | General utilities: logging, config, appdata, git, mathnet, vendored markdown | **Syntax-only + Shim** — the Py2 residuals live in vendored `markdown/`; 2 `AddReferenceToFileAndPath` sites (`git`, `mathnet`) |
+| `revit`      | 25 | The Revit API wrapper (`db` query/create, events, selection, transactions) | **Idiom port** — bounded §6.5 fixes: 2 `out`/`ref` sites, event hookups, generic collections; already partially dual-targeted |
+| `interop`    |  9 | Bridges to Excel, Rhino, IFC, DXF, Autodesk Desktop Connector | **Shim** — 9 of the 17 `AddReferenceToFileAndPath` sites; otherwise engine-agnostic .NET |
+| `routes`     |  9 | REST API framework (HTTP server inside Revit) | **Compatible** — already dual-imports `socketserver`/`SocketServer`; one `IRONPY` branch |
+| `runtime`    |  8 | Engine plumbing: script execution config, command type maker | **Dual-target already** — parts superseded by the Roslyn type generator |
+| `extensions` |  8 | Extension/bundle discovery and parsing | **Compatible** (pure Python) — superseded at startup by the C# `pyRevitExtensionParser` |
+| `loader`     |  7 | Session manager, `asmmaker`/`uimaker` | **Superseded** — replaced by the C# loader/bootstrap (#3438) |
+| `forms`      |  6 | WPF dialog library | **Major work** — the long pole; see §5 and §7 |
+| `versionmgr` |  5 | Version and update checks | **Compatible** |
+| `telemetry`  |  3 | Usage-record sender | **Compatible** — uses `compat.urlopen` |
+| `output`     |  3 | Python wrapper over the C# `ScriptOutput` console | **Compatible** — the proven Option B pattern (§7.1) |
+| `preflight`  |  2 | Model-check (preflight) framework | **Compatible** (pure Python) |
+| top-level modules | — | `framework.py` (CLR-loading hub), `compat.py` (engine shims), `api.py` (Revit API refs), `script.py`, `engine.py`, `labs.py`, `userconfig.py` | **Compatible / Shim** — `framework.py` is *the* shim site (30 `AddReference` calls, 174 lines); the rest is engine-agnostic |
+
+(`unittests` is dev-only and excluded from the support surface.)
 
 ### 4.3 Syntax portability — near-complete
 Genuine Python-2-only syntax is nearly absent: no `print` statements, no `except X, e`, no `has_key`, no `xrange`. Residuals: one `.iteritems()` (first-party — `revit/db/__init__.py`), plus a few `basestring` and a handful of `unicode()` calls concentrated in the vendored `coreutils/markdown/` package. `compat.py` already provides `PY2`/`PY3`/`IRONPY` branches — the tree was written dual-target on purpose.
