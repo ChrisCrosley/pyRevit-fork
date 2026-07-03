@@ -24,7 +24,7 @@ object is a CLR object, so scripts get native, zero-marshaling access to the Rev
 ### 1.3 Recommendation at a glance
 **Destination:** CPython 3.12 + pythonnet 3 — pyRevit's `CPY3123` — as the **default** engine with IronPython 2/3 as an **opt-in legacy engine** kept for backward-compatibility with the existing extension ecosystem, then sunset when that ecosystem has moved.
 
-Concretely: continue the C#-chrome / Python-scripting trajectory, and reimplement `forms` as a **PythonNet + C# assisted UI API** (Option B, §7, gated by the §7.11 prototype) — the one piece that must be solved before CPython can become the default. The flip itself is a designed mechanism (per-extension engine declaration, §9.5), not a global config change. See §2.4 for the runtime vocabulary and §9 for options and sequencing.
+Concretely: continue the C#-chrome / Python-scripting trajectory, and reimplement `forms` as a **PythonNet + C# assisted UI API** (§7, gated by the §7.11 prototype) — the one piece that must be solved before CPython can become the default. The flip itself is a designed mechanism (per-extension engine declaration, §9.3), not a global config change. See §2.4 for the runtime vocabulary and §9 for options and sequencing.
 
 ---
 
@@ -61,11 +61,11 @@ Three traps to avoid:
   "pythonnet" alone is just the interop layer.
 - **pythonnet has two eras.** pythonnet **2.x** (≤ Python 3.8, weak interop) vs pythonnet
   **3.x** (Python 3.7–3.12+, strong interop). Dynamo brands the latter "PythonNet3."
-  **pyRevit's `CPY3123` already runs on pythonnet 3.x** (it must, to host CPython 3.12), so pyRevit is already the "PythonNet3" equivalent — see §6.4.
+  **pyRevit's `CPY3123` already runs on pythonnet 3.x** (it must, to host CPython 3.12), so pyRevit is already the "PythonNet3" equivalent — see §6.2.
 
 The two axes that actually matter: **(a) .NET-native (IronPython) vs bridged (CPython+pythonnet)** — decides WPF/marshaling behavior; and **(b) can it run C-extensions?** — only CPython can, which is the entire reason to move.
 
-**Framing — destination vs scaffolding.** The migration target is **PythonNet3** (`CPY3123`). IronPython 3 is **optional** scaffolding — valuable only if it accelerates the Python 2→3 *syntax* migration while preserving native .NET integration; it is not a destination and can be skipped if IPy2 code is ported straight to PythonNet3. The only potentially-durable IronPython presence is an opt-in legacy compatibility engine for un-migrated extensions.
+**Framing — destination vs legacy.** The migration target is **PythonNet3** (`CPY3123`), and it already ships — the path decision is made. IronPython 3 is not a destination and not a needed stepping stone (IPy2 code ports straight to PythonNet3, §6.1); `IPY342` simply remains an opt-in engine. The only durable IronPython presence is the opt-in legacy compatibility engine for un-migrated extensions.
 
 ---
 
@@ -110,7 +110,7 @@ The two runtimes have structurally different lifecycle models, and flipping the 
 - **`sys.path` is mostly handled — with one ordering bug.** `SetupSearchPaths` rebuilds `sys.path` per run (baseline + `PYTHONPATH` + current bundle paths), so paths don't accumulate. But the baseline is snapshotted per engine-wrapper *on first use* from the *current* `sys.path` — so if extension B's first CPython run happens after extension A ran, A's bundle paths are baked into B's baseline for the session. Fix: snapshot the pristine baseline once, globally, immediately after `PythonEngine.Initialize()`.
 - **Bundles relying on `clean: true` / `persistent: true` (e.g. smartbutton state) have no CPython equivalent** — those semantics must be documented as IronPython-only or given CPython analogs.
 
-**Mitigations (prerequisites for the §9.5 flip):** (1) fix the baseline-snapshot bug; (2) add a per-run **module-eviction policy** — after each execution, drop `sys.modules` entries whose `__file__` lives under an extension directory (pyRevit knows every extension path), keeping stdlib/pip modules warm while restoring IronPython-like isolation for extension code; (3) recommend namespaced lib packages (`import myext_lib.utils`) in the migration guide.
+**Mitigations (prerequisites for the §9.3 flip):** (1) fix the baseline-snapshot bug; (2) add a per-run **module-eviction policy** — after each execution, drop `sys.modules` entries whose `__file__` lives under an extension directory (pyRevit knows every extension path), keeping stdlib/pip modules warm while restoring IronPython-like isolation for extension code; (3) recommend namespaced lib packages (`import myext_lib.utils`) in the migration guide.
 
 ---
 
@@ -120,7 +120,7 @@ The two runtimes have structurally different lifecycle models, and flipping the 
 33 packages, almost entirely pure-Python (only `sqlalchemy` carries optional C-extension artifacts, with a pure-Python fallback). Groups: HTTP/web (`requests`, `urllib3`, `werkzeug`, `websocket`, `slackclient`), data/files (`xlrd`, `xlsxwriter`, `sqlalchemy`, `bson`, `sorted*`), parsing/util (`pyparsing`, `docopt`, `pytz`), and **Python-2 backports** (`six`, `enum`, `pathlib`/`pathlib2`, `scandir`, `importlib_resources`, `unicodecsv`). The backports are the tell-tale of an IronPython-2.7 target.
 
 ### 4.2 Inventory: `pyrevitlib/` (first-party)
-Five packages. Status legend for the PythonNet-3 column: **Compatible** = engine-agnostic today (pure Python, or .NET calls that work identically under pythonnet); **Syntax-only** = bounded Py2-residual / §6.5 idiom cleanup; **Shim** = needs the `framework.py` wrapper for `clr.AddReferenceToFileAndPath`; **Idiom port** = bounded marshaling fixes (§6.5 checklist); **Major work** = redesign required; **Superseded** = replaced by the C# loader path; **Frozen legacy** = kept for the legacy engine only, not ported. Statuses are assessments from this document's findings, not test results.
+Five packages. Status legend for the PythonNet-3 column: **Compatible** = engine-agnostic today (pure Python, or .NET calls that work identically under pythonnet); **Syntax-only** = bounded Py2-residual / §6.1 idiom cleanup; **Shim** = needs the `framework.py` wrapper for `clr.AddReferenceToFileAndPath`; **Idiom port** = bounded marshaling fixes (§6.1 checklist); **Major work** = redesign required; **Superseded** = replaced by the C# loader path; **Frozen legacy** = kept for the legacy engine only, not ported. Statuses are assessments from this document's findings, not test results.
 
 | Package   | Size       | What it is | PythonNet-3 status |
 | --------- | ---------- | ---------- | ------------------ |
@@ -135,7 +135,7 @@ Five packages. Status legend for the PythonNet-3 column: **Compatible** = engine
 | Subpackage | Files | What it does | PythonNet-3 status |
 | ------------ | -----:| ------------ | ------------------ |
 | `coreutils`  | 46 | General utilities: logging, config, appdata, git, mathnet, vendored markdown | **Syntax-only + Shim** — the Py2 residuals live in vendored `markdown/`; 2 `AddReferenceToFileAndPath` sites (`git`, `mathnet`) |
-| `revit`      | 25 | The Revit API wrapper (`db` query/create, events, selection, transactions) | **Idiom port** — bounded §6.5 fixes: 2 `out`/`ref` sites, event hookups, generic collections; already partially dual-targeted |
+| `revit`      | 25 | The Revit API wrapper (`db` query/create, events, selection, transactions) | **Idiom port** — bounded §6.1 fixes: 2 `out`/`ref` sites, event hookups, generic collections; already partially dual-targeted |
 | `interop`    |  9 | Bridges to Excel, Rhino, IFC, DXF, Autodesk Desktop Connector | **Shim** — 9 of the 17 `AddReferenceToFileAndPath` sites; otherwise engine-agnostic .NET |
 | `routes`     |  9 | REST API framework (HTTP server inside Revit) | **Compatible** — already dual-imports `socketserver`/`SocketServer`; one `IRONPY` branch |
 | `runtime`    |  8 | Engine plumbing: script execution config, command type maker | **Dual-target already** — parts superseded by the Roslyn type generator |
@@ -144,7 +144,7 @@ Five packages. Status legend for the PythonNet-3 column: **Compatible** = engine
 | `forms`      |  6 | WPF dialog library | **Major work** — the long pole; see §5 and §7 |
 | `versionmgr` |  5 | Version and update checks | **Compatible** |
 | `telemetry`  |  3 | Usage-record sender | **Compatible** — uses `compat.urlopen` |
-| `output`     |  3 | Python wrapper over the C# `ScriptOutput` console | **Compatible** — the proven Option B pattern (§7.1) |
+| `output`     |  3 | Python wrapper over the C# `ScriptOutput` console | **Compatible** — the proven §7 pattern (§7.1) |
 | `preflight`  |  2 | Model-check (preflight) framework | **Compatible** (pure Python) |
 | top-level modules | — | `framework.py` (CLR-loading hub), `compat.py` (engine shims), `api.py` (Revit API refs), `script.py`, `engine.py`, `labs.py`, `userconfig.py` | **Compatible / Shim** — `framework.py` is *the* shim site (30 `AddReference` calls, 174 lines); the rest is engine-agnostic |
 
@@ -186,14 +186,14 @@ The largest body of code affected by any engine-default change is pyRevit's **ow
 | Dev tests (1)       | Import-only smoke test |
 | Third-party scripts | The real constituency — rpw was popular across pyRevit/RevitPythonShell/Dynamo; these are IronPython scripts served by the legacy engine |
 
-The IronPython-*only* coupling is confined to `rpw.ui.forms` (~1,085 lines: `FlexForm`, TaskDialog wrappers, OS dialogs, console), which loads `IronPython.Wpf` directly (2 of the 17 `AddReferenceToFileAndPath` sites) and subclasses WPF types — it hard-fails at import under CPython, with no `_cpy` stub layer or engine dispatch. The remaining ~5,500 lines (`rpw.db` collectors/transactions/parameter wrappers, `rpw.ui.Selection`) are plain `clr`/`System` interop that would *likely* import under pythonnet, subject to the §6.5 idioms — but "probably works, untested" is not a support tier.
+The IronPython-*only* coupling is confined to `rpw.ui.forms` (~1,085 lines: `FlexForm`, TaskDialog wrappers, OS dialogs, console), which loads `IronPython.Wpf` directly (2 of the 17 `AddReferenceToFileAndPath` sites) and subclasses WPF types — it hard-fails at import under CPython, with no `_cpy` stub layer or engine dispatch. The remaining ~5,500 lines (`rpw.db` collectors/transactions/parameter wrappers, `rpw.ui.Selection`) are plain `clr`/`System` interop that would *likely* import under pythonnet, subject to the §6.1 idioms — but "probably works, untested" is not a support tier.
 
 **Policy: freeze the entire library as legacy**, not just `rpw.ui`. Rationale:
 - Upstream is unmaintained; any porting/validation work means pyRevit adopting a second Revit API wrapper that duplicates `pyrevit.revit` — the opposite of concentrating effort.
 - No shipped tool uses the non-UI half; certifying it under pythonnet serves no known consumer. Third-party rpw scripts are IronPython scripts and keep the legacy engine regardless.
 - A split status ("`rpw.ui` legacy, rest supported") commits the team to the untested half while real-world scripts use the library as a whole.
 
-Concretely: `rpw` is supported under the opt-in legacy IronPython engine only, excluded from the CPython-supported surface, with `pyrevit.forms` documented as the replacement. Two prerequisite actions: (1) replace the `pickling.py` import so core has zero rpw dependence (and rpw could eventually be unbundled entirely); (2) port the two FlexForm tools during the §4.6 extension pass. `FlexForm`'s niche — a multi-field input form composed in code, no XAML — has no direct `pyrevit.forms` equivalent; if migration feedback shows demand, a small `forms.FlexForm`-style helper on the Option B primitives is a far cheaper answer than porting rpw.
+Concretely: `rpw` is supported under the opt-in legacy IronPython engine only, excluded from the CPython-supported surface, with `pyrevit.forms` documented as the replacement. Two prerequisite actions: (1) replace the `pickling.py` import so core has zero rpw dependence (and rpw could eventually be unbundled entirely); (2) port the two FlexForm tools during the §4.6 extension pass. `FlexForm`'s niche — a multi-field input form composed in code, no XAML — has no direct `pyrevit.forms` equivalent; if migration feedback shows demand, a small `forms.FlexForm`-style helper on the §7 primitives is a far cheaper answer than porting rpw.
 
 ---
 
@@ -240,54 +240,43 @@ reflection). Almost everything hard about `forms` flows from that asymmetry.
 
 ---
 
-## 6. The Two "Python 3" Paths Compared
+## 6. Migrating to PythonNet3
 
-### 6.1 IronPython 3 (`IPY342`)
-Real, buildable, shipped as an opt-in engine (its own `IronPython.Wpf`, runtime built via `#if IPY342`). Upstream is community-maintained (IronLanguages, not Microsoft), alive but slow (3.4.0 in 2022, 3.4.1 mid-2024, 3.4.2 Dec 2024), pinned near the Python 3.4 language level with some backports (f-strings). **Because it is still a .NET language, the `forms` blockers and `revit/` marshaling issues largely evaporate** — migration is mostly a Python 2→3 syntax bump. It does **not** provide the C-extension ecosystem (no numpy/pandas).
+The destination runtime already ships: `CPY3123` **is** CPython 3.12 + pythonnet 3 — the same "PythonNet3" stack Dynamo migrated to. There is no engine decision left to make; the remaining work is porting pyRevit's Python code to it. This section catalogs what actually changes for code moving from IronPython to PythonNet3, and clears up the pythonnet-2-era confusion that still colors community expectations.
 
-### 6.2 CPython 3.12 (`CPY3123`) via pythonnet
-The Revit-API *interaction idioms change* (full migration checklist in §6.5, corroborated by
-Dynamo's real-world migration):
-
+### 6.1 The migration checklist — what changes for Revit-API code
+The Revit-API *interaction idioms change* (each item corroborated by Dynamo's real-world migration, §6.2):
 - **`out`/`ref` params become return tuples** (`res, fam = doc.LoadFamily(...)`), replacing the IronPython `clr.Reference[T]()` pattern used in `query.py`/`create.py` today.
 - **Collections need explicit generic construction** (`List[ElementId]([...])`), and are now **"views" not deep copies** — wrap in `list()` where mutation/Python-list methods are needed.
 - **Enum → int is no longer implicit** — use `int(cat)` or the enum member.
 - **`super().__init__()` is required** when subclassing .NET types.
 - **Indexer properties** need the `get_` accessor (`elem.get_Space(phase)`), and `IEnumerable` cannot be bracket-indexed.
-- **`with` on `IDisposable`**, **overload resolution**, and **interface implementation** differ. Unlocks the full pip/PyPI ecosystem (already works today via `#! python3`).
+- **`with` on `IDisposable`** needs explicit `.Dispose()`.
+- **Overload resolution differs**, and LINQ-style calls need explicit delegate types (`System.Func[...]`).
+- **Interface implementation needs a `__namespace__` attribute** (relevant wherever scripts implement `IExternalEventHandler` and friends).
+- **COM/GAC access is lost on .NET Core hosts** (Revit 2025+) — use Python-native libraries (e.g. `openpyxl`) instead.
 
-### 6.3 Side-by-side trade-offs
-|                               | IronPython 3                 | CPython / pythonnet             |
-| ----------------------------- | ---------------------------- | ------------------------------- |
-| Modern language level         | ✗ (~3.4)                     | ✓ (3.12)                        |
-| C-extension ecosystem (numpy) | ✗ never                      | ✓                               |
-| `forms` port cost             | Low (syntax bump)            | High (rewrite)                  |
-| Revit-API code churn          | Minimal                      | Real (idioms change)            |
-| Maintenance                   | pyRevit fork; small upstream | pyRevit fork + embedded CPython |
+In exchange, the full pip/PyPI C-extension ecosystem (numpy/pandas) unlocks — already true today via `#! python3`.
 
-### 6.4 pythonnet version matters — pyRevit is already on the good one
+### 6.2 pythonnet 2 vs 3 — and Dynamo's prior art
+pythonnet has two eras: **2.x** (≤ Python 3.8, weak .NET interop) and **3.x** (Python 3.7–3.12+, much-improved interop — `out`-params as tuples, LINQ/extension methods, operator overloading, better overload resolution). Dynamo brands their pythonnet-3 engine "PythonNet3" and reports that most "previously impossible" limitations were **pythonnet-2.x** problems that pythonnet 3 fixed. Because pyRevit runs **CPython 3.12**, its fork is necessarily **pythonnet 3.x** (confirmed by the `Py.GIL()` / `Python.Runtime` API in `CPythonEngine.cs`) — so community lore about "pythonnet can't do X" largely describes the 2.x era, not what pyRevit ships.
 
-pythonnet has two eras: **2.x** (≤ Python 3.8, weak .NET interop) and **3.x** (Python 3.7–3.12+, much-improved interop — `out`-params as tuples, LINQ/extension methods, operator overloading, better overload resolution). Dynamo brands their pythonnet-3 engine "PythonNet3" and reports that most "previously impossible" limitations were **pythonnet-2.x** problems that pythonnet 3 fixed. Because pyRevit runs **CPython 3.12**, its fork is necessarily **pythonnet 3.x** (confirmed by the `Py.GIL()` / `Python.Runtime` API in `CPythonEngine.cs`). **pyRevit's `CPY3123` is already the "PythonNet3" equivalent** — it already has the improved interop and is not stuck with the old-pythonnet limitations. The target is therefore *not* "adopt pythonnet 3" (done); it is "port pyRevit's code and make `CPY3123` the default."
-
-### 6.5 Prior art: Dynamo's IronPython → PythonNet3 migration
 Dynamo performed essentially this migration and documented it publicly:
-- *PythonNet3: a new Dynamo Python to fix everything* —
-  https://dynamobim.org/pythonnet3-a-new-dynamo-python-to-fix-everything/
-- *Dynamo PythonNet3 upgrade: a practical guide to migrating your Dynamo graphs* —
-  https://dynamobim.org/dynamo-pythonnet3-upgrade-a-practical-guide-to-migrating-your-dynamo-graphs/
+- *PythonNet3: a new Dynamo Python to fix everything* — https://dynamobim.org/pythonnet3-a-new-dynamo-python-to-fix-everything/
+- *Dynamo PythonNet3 upgrade: a practical guide to migrating your Dynamo graphs* — https://dynamobim.org/dynamo-pythonnet3-upgrade-a-practical-guide-to-migrating-your-dynamo-graphs/
 
 Relevance to this plan:
-- **Same path.** Dynamo's staged route was **IronPython2 → IronPython3 → PythonNet3** — the trajectory in §9.4.
-- **Validates Option B.** Even on pythonnet 3, Dynamo reports WPF-in-Python still needs "namespace manipulation and property declaration boilerplate, substantially more verbose than IronPython" — i.e. WPF stays painful in Python, arguing to move it to C# (§7) rather than reimplement it in Python (§9.1).
-- **Concrete API migration checklist** (what real scripts hit, expanding §6.2): `out`/`ref` → return tuple; enum→int now explicit; `super().__init__()` required for .NET subclasses; collections are views (use `list()`); explicit `List[T][...]` casts; LINQ lambdas need `System.Func[...]`; indexer `get_` accessors; `IEnumerable` not bracket-indexable; `with`/`IDisposable` needs explicit `.Dispose()`; interface implementation needs a `__namespace__` attribute; COM/GAC access lost on .NET Core (use Python libs like `openpyxl`).
+- **Same destination, shorter route.** Dynamo staged through IronPython 3 (IronPython2 → IronPython3 → PythonNet3); pyRevit skips that stage — the PythonNet3 runtime already ships as `CPY3123`.
+- **Validates the §7 approach.** Even on pythonnet 3, Dynamo reports WPF-in-Python still needs "namespace manipulation and property declaration boilerplate, substantially more verbose than IronPython" — i.e. WPF stays painful in Python, arguing to move it to C# (§7) rather than reimplement it in Python (§9.1).
+- **The §6.1 checklist is field-tested** — it mirrors what Dynamo's users actually hit migrating real graphs, not a theoretical diff of the runtimes.
 - **Coexistence & security corroboration** — CPython and PythonNet3 engines coexist per-node (pyRevit already selects engine per-button, supporting incremental migration), and Dynamo cites Python 2's 15-year lack of security updates (see §8.6).
 
 ---
 
-## 7. Proposed Direction: PythonNet + C# assisted UI API (Option B)
+## 7. The Chosen Direction: PythonNet + C# assisted UI API
 
 ### 7.1 The proven precedent: `ScriptOutput` / `PyRevitOutputWindow`
-The output console is **already** a C#-hosted WPF window (`ScriptOutput.cs`) driven from Python via a thin wrapper (`output/__init__.py`, forwarding through `__getattr__`). Scripts call `script.get_output()` and get the same object on any engine, because they are just calling .NET methods. Option B generalizes this pattern from the console to dialogs.
+The output console is **already** a C#-hosted WPF window (`ScriptOutput.cs`) driven from Python via a thin wrapper (`output/__init__.py`, forwarding through `__getattr__`). Scripts call `script.get_output()` and get the same object on any engine, because they are just calling .NET methods. The §7 approach generalizes this pattern from the console to dialogs.
 
 ### 7.2 MVVM primer (why the ViewModel must be .NET-visible)
 - **Model** = domain data (Revit elements). **View** = XAML. **ViewModel** = properties +
@@ -328,11 +317,11 @@ find named controls, attach handlers, read/write control state, and dump rows in
 ### 7.7 Concrete code comparison
 
 All snippets below are **illustrative** — the current-state ones reflect real pyRevit APIs;
-the Option A / Option B ones sketch the shape each approach would take. The point is the *developer experience*, not copy-pasteable code.
+the "DIY pythonnet" / "C# layer" ones sketch the shape each approach would take. The point is the *developer experience*, not copy-pasteable code.
 
 **Note on built-in dialogs:** for callers of built-in dialogs (`forms.alert`,
-`forms.SelectFromList`, ...), Options A and B look **identical** — the Python caller API is
-preserved in both, and the difference is purely internal (Option A reimplements each dialog in Python; Option B in C#). The developer-visible divergence appears when **authoring a custom dialog**, so the scenario below is a custom live-preview dialog (a batch-renumber tool, modeled on the existing `ReValue` button).
+`forms.SelectFromList`, ...), the DIY-pythonnet and C#-layer approaches look **identical** — the Python caller API is
+preserved in both, and the difference is purely internal (DIY reimplements each dialog in Python; the C# layer in C#). The developer-visible divergence appears when **authoring a custom dialog**, so the scenario below is a custom live-preview dialog (a batch-renumber tool, modeled on the existing `ReValue` button).
 
 #### Baseline — today, on IronPython (works)
 
@@ -364,7 +353,7 @@ RenumberWindow("renumber.xaml").show_dialog()
 
 Three IronPython-only conveniences make this terse: XAML loads *into* `self`, `x:Name` controls auto-appear as `self.<name>`, and `{Binding}` resolves against Python objects. Under `#! python3` today this class raises `PyRevitCPythonNotSupported` at construction.
 
-#### Option A — the same custom dialog, reimplemented in Python on pythonnet
+#### DIY pythonnet — the same custom dialog, reimplemented in Python by hand
 
 ```python
 #! python3
@@ -393,7 +382,7 @@ class RenumberWindow:                              # composition, not inheritanc
 
 Every custom-dialog author must now: use composition, `FindName` each control, wire events manually, and convert Python data to a `DataTable` (or hand-roll an `ICustomTypeDescriptor` adapter) because binding to Python objects is dead. This boilerplate repeats in every extension.
 
-#### Option B — the same dialog, engine-agnostic, via pyRevit's C# layer
+#### pyRevit C# layer — the same dialog, engine-agnostic
 
 *MVVM path (`forms.BindableModel`):*
 
@@ -445,7 +434,7 @@ if grid.show_dialog():
         apply_number(row["sheet"], row["new"])
 ```
 
-#### Where Option B's cost lives — the C# side (authored once)
+#### Where the C# layer's cost lives — the C# side (authored once)
 
 The ergonomics above depend on a small amount of C# pyRevit ships. `BindableModel` is a thin Python wrapper (same forwarding trick as `PyRevitOutputWindow`) over a C# core that WPF binding can see:
 
@@ -480,12 +469,12 @@ class BindableModel(object):
         return self._core.Get(name)
 ```
 
-This C# lives in one place and serves **every** engine, versus Option A's adapter logic that
+This C# lives in one place and serves **every** engine, versus the DIY adapter logic that
 each Python author reinvents.
 
 #### Developer-experience summary
 
-| Concern                   | Baseline (IPy)          | Option A (CPython, Python)          | Option B (C# layer)            |
+| Concern                   | Baseline (IPy)          | DIY (pure pythonnet)             | pyRevit C# layer               |
 | ------------------------- | ----------------------- | ----------------------------------- | ------------------------------ |
 | Works under `#! python3`  | ✗                       | ✓                                   | ✓                              |
 | Works under IronPython    | ✓                       | (n/a)                               | ✓ (one codebase)               |
@@ -500,7 +489,7 @@ each Python author reinvents.
 
 Under pythonnet 3 users can build **arbitrary WPF entirely in Python** without `pyrevit.forms` (`clr.AddReference("PresentationFramework")` → `XamlReader.Load` → `FindName` → `+=` handlers → `ShowDialog()`). The C# API does not lock anyone in; it coexists with hand-rolled WPF (a single command can use both). What `forms` *buys* is absorbing two kinds of baggage authors would otherwise re-solve every time:
 
-- **The general pythonnet-WPF tax** (§7.7 / §6.5): composition + `FindName`, manual event wiring, no `{Binding}` to Python objects, `super().__init__()`, `__namespace__` for interfaces.
+- **The general pythonnet-WPF tax** (§7.7 / §6.1): composition + `FindName`, manual event wiring, no `{Binding}` to Python objects, `super().__init__()`, `__namespace__` for interfaces.
 - **Revit-host concerns** — window ownership/parenting to the Revit window
   (`WindowInteropHelper` + `AdWindows.ComponentManager.ApplicationWindow`), assembly references (`PresentationFramework`/`PresentationCore`/`WindowsBase`/`System.Xaml`, incl. the .NET 8 Desktop runtime on Revit 2025+), MahApps + pyRevit dark-theme resources, and — the sharpest edge — **modeless windows that call the Revit API**, which must marshal back via `ExternalEvent`/`IExternalEventHandler` (pythonnet needs the `__namespace__` interface trick +
   GIL care). Modal dialogs are simple DIY; modeless-with-API-callbacks is genuinely tricky.
@@ -525,7 +514,7 @@ Suggested ordering (easy → hard):
 Planning notes:
 
 - **Built-in dialogs are cleanly incremental; the subclassable base is one deliberate step.**
-  Leaf dialogs (Tiers 0–4) are independent, added one at a time. `WPFWindow`/`WPFPanel` (Tier 5) is infrastructure users subclass — it can't be half-shipped. Under **Option B this is easier**:
+  Leaf dialogs (Tiers 0–4) are independent, added one at a time. `WPFWindow`/`WPFPanel` (Tier 5) is infrastructure users subclass — it can't be half-shipped. Under **the C#-layer approach this is easier**:
   built-ins are C# and need no Python-subclassable base, so Tiers 0–4 ship *without* exposing `WPFWindow`, and the custom-authoring API (`forms.WPFWindow`/`BindableModel`) becomes a distinct final milestone.
 - **Hold parity with `_ipy.py`.** Keep public signatures and observable behavior identical across engines; `_ipy.py` is the reference. The parity harness is a **deliverable, not a nice-to-have**: the 167 forms-consuming shipped scripts (§4.6) are a ready-made corpus — run each under both engines per ported element and diff observable behavior.
 - **Low risk by construction.** Per-button engine selection lets authors keep IronPython for any not-yet-ported dialog (no forced migration); the `PyRevitCPythonNotSupported` errors are a precise, actionable coverage signal (could point at a live coverage matrix); and new elements are testable side-by-side against `_ipy`.
@@ -547,7 +536,7 @@ Most of `forms` can stay pure Python under pythonnet, and C# is warranted only f
 | `check_*` validators                 | pure logic, no UI                                              |
 | `select_*` / `ask_*` orchestration   | thin Python delegating to the above/below                      |
 
-These are `.NET` calls with no XAML-into-self and no Python-object binding — they port directly (only the §6.2 idiom cleanups). `alert` and `pick_file` alone are among the most-used forms functions and need zero C#.
+These are `.NET` calls with no XAML-into-self and no Python-object binding — they port directly (only the §6.1 idiom cleanups). `alert` and `pick_file` alone are among the most-used forms functions and need zero C#.
 
 **Needs the WPF-host layer — mostly still Python; C# only where it pays:**
 
@@ -569,17 +558,17 @@ These are `.NET` calls with no XAML-into-self and no Python-object binding — t
 **Consequence for sequencing:** Tiers 0–3 of §7.9 need **no C# at all**; C# arrives late and
 surgically at the modeless/`ProgressBar` tier (→ the host base) and reactive custom dialogs (→ `BindableModel`). It is a dial, not a binary — pick how much ergonomics to buy.
 
-### 7.11 Prototype gate — spike required before Option B is committed
+### 7.11 Prototype gate — spike required before the C# layer is committed
 
-The `BindableCore` sketch in §7.7 is the linchpin of Option B and is currently **asserted,
+The `BindableCore` sketch in §7.7 is the linchpin of the §7 approach and is currently **asserted,
 not proven**. Before the C# layer is committed to, a small, sharply-scoped prototype must demonstrate two things:
 
 1. **WPF binding fidelity against `DynamicObject`.** Plain `{Binding name}` is the easy case; the known weak spots are typed `DataTemplate` resolution, validation (`IDataErrorInfo` / `INotifyDataErrorInfo`), and `ICollectionView` sorting/grouping over dynamic members. The spike must exercise all three, not just the happy path.
-2. **The chatty-callback path under the GIL.** `ICommand.CanExecute` is re-queried by WPF's `CommandManager.RequerySuggested` — frequently, on the UI thread — and under Option B every call crosses the pythonnet bridge and acquires the GIL. §5.4 and §8.3 flag GIL × Dispatcher × Revit-context as the hang risk; this design routes high-frequency UI-thread callbacks straight through that seam, so it must be measured, not assumed. The spike should include a
+2. **The chatty-callback path under the GIL.** `ICommand.CanExecute` is re-queried by WPF's `CommandManager.RequerySuggested` — frequently, on the UI thread — and with a Python-driven ViewModel every call crosses the pythonnet bridge and acquires the GIL. §5.4 and §8.3 flag GIL × Dispatcher × Revit-context as the hang risk; this design routes high-frequency UI-thread callbacks straight through that seam, so it must be measured, not assumed. The spike should include a
    **modeless progress bar driving Revit API calls through `ExternalEvent`** — the combination §7.10 rates "genuinely tricky."
 
 **Fallback if the spike fails:** `DataTable`-backed binding (§7.3) plus imperative control
-access still covers Tiers 0–4 of §7.9; only the reactive-MVVM custom-dialog tier is lost, and Option B degrades gracefully to "C# host plumbing + `DataGrid`" rather than collapsing.
+access still covers Tiers 0–4 of §7.9; only the reactive-MVVM custom-dialog tier is lost, and the approach degrades gracefully to "C# host plumbing + `DataGrid`" rather than collapsing.
 
 ---
 
@@ -607,12 +596,12 @@ pyRevit controls the loader, the wrapper library, **and all engines**: IronPytho
 
 ### 8.5 Risks & downsides
 
-1. **Ecosystem backward-compat break** (dominant risk): community extensions are largely IronPython 2 — as are pyRevit's own 441 shipped scripts (§4.6); a naive CPython default forces mass migration or a permanently split ecosystem. Mitigated by the per-extension declaration mechanism (§9.5), which keeps un-declared extensions on today's behavior.
+1. **Ecosystem backward-compat break** (dominant risk): community extensions are largely IronPython 2 — as are pyRevit's own 441 shipped scripts (§4.6); a naive CPython default forces mass migration or a permanently split ecosystem. Mitigated by the per-extension declaration mechanism (§9.3), which keeps un-declared extensions on today's behavior.
 2. **Maintenance surface grows before it shrinks:** IPy2 and/or IPy3 + CPython + the C# layer, all at once, through a long transition.
 3. **pythonnet becomes load-bearing**, with its own quirks (GIL × Dispatcher × Revit API) — and the shared-interpreter isolation model (§3.5) replaces per-extension engine isolation.
 4. **The `forms` rewrite is large and compatibility-sensitive**; custom-`WPFWindow` authors face a migration; CPython has no dialogs until it lands.
 5. **Behavior/perf differences** across the ~25 `revit/` modules require per-case validation.
-6. **Embedded-CPython packaging friction** (pip/site-packages, C-extension ABIs, version pins) — plus the per-engine `site-packages` split (§9.4 step 3) doubles the vendored-tree maintenance until the legacy engine sunsets.
+6. **Embedded-CPython packaging friction** (pip/site-packages, C-extension ABIs, version pins) — plus the per-engine `site-packages` split (§9.2 step 3) doubles the vendored-tree maintenance until the legacy engine sunsets.
 7. **Package-version churn** — moving to CPython pulls in modern package majors (Dynamo's upgrade jumped numpy 1.24→2.1, pandas 1.5→2.2), whose own breaking changes can break user scripts independently of the engine swap.
 
 ### 8.6 Security considerations
@@ -627,23 +616,16 @@ pyRevit controls the loader, the wrapper library, **and all engines**: IronPytho
 
 ---
 
-## 9. Recommendation & Options
+## 9. Recommendation & Sequencing
 
-### 9.1 Option A — reimplement `forms` on pythonnet, in Python
+### 9.1 The chosen approach — and the alternatives set aside
+The direction is the §7 design: move the WPF layer into C# (`forms.DataGrid`, `forms.BindableModel`) with a thin Python API. One implementation serves all engines; it kills the `_ipy`/`_cpy` divergence; it aligns with the C# loader/bootstrap direction; MahApps/ControlzEx are already vendored; and the `ScriptOutput` precedent proves the pattern. The cost is a large, compatibility-sensitive C# rewrite and a migration for custom-dialog authors. **Commitment to the `BindableModel` half is conditional on the §7.11 prototype passing**; the host-plumbing half stands on its own either way.
 
-Rewrite `_cpy.py` with `XamlReader` + `FindName` + an `ICustomTypeDescriptor`/
-`INotifyPropertyChanged` adapter for binding. **Pro:** stays in Python. **Con:** re-solves the
-entire WPF-binding problem per engine; permanently maintains engine-specific UI code (`_ipy.py` + a heavy `_cpy.py`).
+Two alternatives were considered and set aside:
+- **Reimplement `forms` in pure Python on pythonnet** — rewrite `_cpy.py` with `XamlReader` + `FindName` + an `ICustomTypeDescriptor`/`INotifyPropertyChanged` binding adapter. Stays in Python, but re-solves the entire WPF-binding problem per engine and permanently maintains two divergent UI codebases (`_ipy.py` + a heavy `_cpy.py`). It survives as the flavor of the §7.11 fallback for anything the C# layer doesn't cover.
+- **IronPython 3 as the default** — the cheapest exit from Python 2 (`forms` and `revit/` carry across as a syntax bump), but capped at ~Python 3.4, permanently without the C-extension ecosystem, and it bets the default on a slow, small-team fork — to defer a PythonNet3 runtime that *already ships*. `IPY342` stays what it is today: an opt-in engine.
 
-### 9.2 Option B — PythonNet + C# assisted UI API (recommended, gated by the §7.11 spike)*
-
-Move the WPF layer into C# (`forms.DataGrid`, `forms.BindableModel`), Python calls in. **Pro:** one implementation for all engines; kills the `_ipy`/`_cpy` divergence; aligns with the C# loader/bootstrap direction; MahApps/ControlzEx already vendored; the `ScriptOutput` precedent proves it. **Con:** large, compatibility-sensitive C# rewrite; migration for custom-dialog authors. **Commitment to the `BindableModel` half is conditional on the §7.11 prototype passing**; the host-plumbing half stands on its own either way.
-
-### 9.3 Option C — IronPython 3 as default, keep `forms` as-is
-
-Switch the default IronPython engine to `IPY342`. **Pro:** cheapest way off Python 2; `forms` and `revit/` carry across as a syntax bump; no marshaling rewrite. **Con:** capped at ~Python 3.4; **no** numpy/pandas ecosystem; bets the default on a slow, small-team fork.
-
-### 9.4 Suggested sequencing
+### 9.2 Suggested sequencing
 
 **Destination: `CPY3123` (CPython 3.12 + pythonnet 3) as the default engine.** Steps 1–5 are scaffolding on the way there. **Size** is relative effort on a 1–5 scale (5 = largest);
 **Done when** is the exit criterion that gates the next step — deliberately no calendar
@@ -651,27 +633,23 @@ estimates, since pacing depends entirely on maintainer availability.
 
 | #   | Step                                                                                                                                                                          | Size | Done when                                                                                                                                                                                                               |
 | --- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |:----:| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 0   | **Run the §7.11 spike** (`BindableCore` binding fidelity + modeless/`ExternalEvent` under GIL)                                                                                | 1    | Both §7.11 demonstrations pass, or the fallback (DataTable-only) is adopted and §9.2 re-scoped                                                                                                                          |
+| 0   | **Run the §7.11 spike** (`BindableCore` binding fidelity + modeless/`ExternalEvent` under GIL)                                                                                | 1    | Both §7.11 demonstrations pass, or the fallback (DataTable-only) is adopted and the §7 approach re-scoped                                                                                                                          |
 | 1   | **Land the C# bootstrap (#3438)**                                                                                                                                             | 3    | Startup and reload complete with no IronPython engine created before the first command executes                                                                                                                         |
-| 2   | **Finish the `pyrevitlib` port**: syntax residuals (§4.3), shim `clr.AddReferenceToFileAndPath` in `framework.py`, port the `out`-param sites and the §6.5 idioms in `revit/` | 2    | `pyrevitlib` imports cleanly and its unit suites pass under `CPY3123`; no IronPython-only CLR API remains outside `framework.py`                                                                                        |
+| 2   | **Finish the `pyrevitlib` port**: syntax residuals (§4.3), shim `clr.AddReferenceToFileAndPath` in `framework.py`, port the `out`-param sites and the §6.1 idioms in `revit/` | 2    | `pyrevitlib` imports cleanly and its unit suites pass under `CPY3123`; no IronPython-only CLR API remains outside `framework.py`                                                                                        |
 | 3   | **Split `site-packages/` per engine family**: a Python-3 tree for CPython (re-vendored modern releases) and a *frozen* Py2 tree for the legacy IronPython engine              | 2    | Each engine resolves only its own tree; Py2 backports (`six`, `pathlib2`, `scandir`, `unicodecsv`, ...) exist only in the frozen tree                                                                                   |
-| 4   | **Build the Option B `forms` layer** per §7.9/§7.10: pure-Python tiers first, C# host base + `BindableModel` last; port the shipped extensions (§4.6) as elements land        | 5    | Every public `_ipy.py` symbol either works under CPython or appears in a published coverage matrix; the §4.6 parity corpus passes under both engines; `settings_window.py`/`utils.py` no longer hard-require IronPython |
-| 5   | **Flip the default via the §9.5 mechanism**; keep the opt-in legacy IronPython engine, then sunset it once the ecosystem has moved                                            | 4    | Per-extension engine declaration shipped for ≥1 major release; all shipped extensions declare an engine; coverage matrix complete for §7.9 Tiers 0–4; §3.5 isolation mitigations (baseline fix + module eviction) shipped |
+| 4   | **Build the §7 `forms` layer** per §7.9/§7.10: pure-Python tiers first, C# host base + `BindableModel` last; port the shipped extensions (§4.6) as elements land        | 5    | Every public `_ipy.py` symbol either works under CPython or appears in a published coverage matrix; the §4.6 parity corpus passes under both engines; `settings_window.py`/`utils.py` no longer hard-require IronPython |
+| 5   | **Flip the default via the §9.3 mechanism**; keep the opt-in legacy IronPython engine, then sunset it once the ecosystem has moved                                            | 4    | Per-extension engine declaration shipped for ≥1 major release; all shipped extensions declare an engine; coverage matrix complete for §7.9 Tiers 0–4; §3.5 isolation mitigations (baseline fix + module eviction) shipped |
 
 **Why step 3 is a split, not a drop.** An earlier draft said "drop the Py2 backports" — but the legacy IronPython 2 engine this plan keeps (§8.1) serves extensions that *import* those backports from the same shared `site-packages/`. One tree cannot serve both engines. The per-engine split resolves the contradiction: the CPython tree modernizes freely while the frozen IPy2 tree preserves the compatibility promise, and the frozen tree is deleted wholesale when the legacy engine sunsets. The engines already have separate resolution paths, so this is mostly a loader-path change.
 
-**On IronPython 3:** treat it as *optional* scaffolding. It helps only if it lets you do the
-Python 2→3 *syntax* migration while keeping IronPython's native .NET integration (so
-forms/raw-API code keeps working mid-port). It is **not** a destination (capped ~Python 3.4, no numpy, small-team fork). If IPy2 code can be ported straight to PythonNet3, IPy3 can be skipped.
-
-### 9.5 The default-flip mechanism (step 5 is a design problem, not a config change)
+### 9.3 The default-flip mechanism (step 5 is a design problem, not a config change)
 
 Today's invariant: **absence of a shebang means IronPython.** A global default flip silently re-engines every no-shebang script on every installed machine — starting with pyRevit's own 441 shipped scripts, of which zero end-user tools carry a `#! python3` shebang (§4.6). A one-line config change is therefore the wrong mechanism. Instead:
 
 - **Per-extension engine declaration.** Add an `engine` key to extension metadata
   (`extension.json` / bundle level, mirroring how bundles already override engine configs). An extension that declares `ironpython` keeps today's behavior indefinitely; one that declares `cpython` gets the new default for all its no-shebang scripts. Per-script shebangs still win, preserving today's per-button granularity.
-- **"Flipping the default" then means:** (a) shipped extensions declare `cpython` once ported (§9.4 step 4), and (b) only extensions that declare *nothing* are affected by any global default change — and that change can be deferred, staged by major version, or scoped to extensions created after a cutoff, rather than imposed on the installed base.
-- **Deprecation communication.** At least one major release where the IronPython default is announced as deprecated but *unchanged*, shipped alongside the published `forms` coverage matrix and a migration guide (the §6.5 checklist is most of it).
+- **"Flipping the default" then means:** (a) shipped extensions declare `cpython` once ported (§9.2 step 4), and (b) only extensions that declare *nothing* are affected by any global default change — and that change can be deferred, staged by major version, or scoped to extensions created after a cutoff, rather than imposed on the installed base.
+- **Deprecation communication.** At least one major release where the IronPython default is announced as deprecated but *unchanged*, shipped alongside the published `forms` coverage matrix and a migration guide (the §6.1 checklist is most of it).
 - **Isolation semantics are part of the flip.** Moving a no-shebang script to CPython also moves it from per-extension engine isolation to one shared interpreter (§3.5). The §3.5 mitigations — the `sys.path` baseline fix and the extension-module eviction policy — ship *before* any default change, so flipped extensions keep IronPython-like isolation for their own code.
 - **Gating without central usage data.** pyRevit's telemetry server is a tool users deploy for their own fleets — there is no central instance to measure ecosystem readiness from. The flip decision must therefore rest on proxies the project controls: coverage-matrix completeness, the §4.6 parity corpus passing, shipped extensions fully declared, and community feedback through the deprecation release cycle.
 
@@ -708,7 +686,7 @@ Today's invariant: **absence of a shebang means IronPython.** A global default f
 - **Roslyn loader** — C# path that generates command types as C# source compiled by Roslyn, replacing IronPython `Reflection.Emit`.
 - **pythonnet** — CPython↔.NET *bridge* (not an interpreter); pyRevit fork
   `pyrevitlabs/pythonnet`. **v3.x** has the improved interop; pyRevit runs 3.x. See §2.4.
-- **PythonNet3** — Dynamo's name for **CPython 3.x + pythonnet 3.x** together; pyRevit's `CPY3123` equivalent and the migration destination. See §2.4 / §6.4.
+- **PythonNet3** — Dynamo's name for **CPython 3.x + pythonnet 3.x** together; pyRevit's `CPY3123` equivalent and the migration destination. See §2.4 / §6.2.
 - **MVVM** — Model-View-ViewModel; WPF's binding-centric UI pattern.
 - **BAML** — compiled/binary XAML produced at build time.
 - **CAS** — .NET Framework Code Access Security (deprecated; never a real IronPython sandbox).
