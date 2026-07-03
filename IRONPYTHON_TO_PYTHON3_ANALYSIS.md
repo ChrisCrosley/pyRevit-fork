@@ -165,8 +165,6 @@ The largest body of code affected by any engine-default change is pyRevit's **ow
 | Dev tests (1)       | Import-only smoke test |
 | Third-party scripts | The real constituency — rpw was popular across pyRevit/RevitPythonShell/Dynamo; these are IronPython scripts served by the legacy engine |
 
-(A fourth apparent consumer, *Test RevitServer*, actually imports **`rpws`** — the separate, pure-HTTP Revit Server wrapper. `rpws`, `rjm`, and `rsparam` are distinct packages.)
-
 The IronPython-*only* coupling is confined to `rpw.ui.forms` (~1,085 lines: `FlexForm`, TaskDialog wrappers, OS dialogs, console), which loads `IronPython.Wpf` directly (2 of the 17 `AddReferenceToFileAndPath` sites) and subclasses WPF types — it hard-fails at import under CPython, with no `_cpy` stub layer or engine dispatch. The remaining ~5,500 lines (`rpw.db` collectors/transactions/parameter wrappers, `rpw.ui.Selection`) are plain `clr`/`System` interop that would *likely* import under pythonnet, subject to the §6.5 idioms — but "probably works, untested" is not a support tier.
 
 **Policy: freeze the entire library as legacy**, not just `rpw.ui`. Rationale:
@@ -185,18 +183,16 @@ Concretely: `rpw` is supported under the opt-in legacy IronPython engine only, e
 
 The long pole is longer than `_ipy.py` alone. Full inventory of the `forms/` package:
 
-| File(s)              | Lines | Engine-gated?   | Notes                                                                                                                       |
-| -------------------- | -----:| --------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| `_ipy.py`            | 4,105 | ✓ via facade    | the real WPF implementation                                                                                                 |
-| `_cpy.py`            | 103   | ✓ via facade    | stubs (see §5.2)                                                                                                            |
-| `settings_window.py` | 705   | ✗ **not gated** | core Settings UI; subclasses `WPFWindow`                                                                                    |
-| `utils.py`           | 63    | ✗ **not gated** | imports the IronPython-only `wpf` module at module top level — hard-fails on import under CPython                           |
-| `toaster.py`         | 61    | ✗ not gated     | shells out to a bundled toast exe; portable                                                                                 |
+| File(s)              | Lines | Engine-gated?    | Notes |
+| -------------------- | -----:| ---------------- | -------------------------------- |
+| `_ipy.py`            | 4,105 | ✓ via facade    | the real WPF implementation |
+| `_cpy.py`            | 103   | ✓ via facade    | stubs (see §5.2) |
+| `settings_window.py` | 705   | ✗ **not gated** | core Settings UI; subclasses `WPFWindow`|
+| `utils.py`           | 63    | ✗ **not gated** | imports the IronPython-only `wpf` module at module top level — hard-fails on import under CPython |
+| `toaster.py`         | 61    | ✗ not gated     | shells out to a bundled toast exe; portable |
 | 21 `.xaml` files     | —     | —               | authored against the LoadComponent-into-self model: `x:Name` auto-wiring and XAML handler names resolving to Python methods |
 
-So the port scope is **~4,900+ Python lines plus 21 XAML files**, and two of those files
-(`settings_window.py`, `utils.py`) sit *outside* the `_ipy`/`_cpy` dispatch and must be
-brought under it (or ported) as part of the work.
+So the port scope is **~4,900+ Python lines plus 21 XAML files**, and two of those files (`settings_window.py`, `utils.py`) sit *outside* the `_ipy`/`_cpy` dispatch and must be brought under it (or ported) as part of the work.
 
 ### 5.2 What `#! python3` users get today: forms wholesale unavailable
 
