@@ -1,6 +1,6 @@
 # pyRevit: IronPython Dependence & the Path to a Python 3 Default
 
-> **Audience:** pyevit core maintainers.
+> **Audience:** pyRevit core maintainers.
 > **Status:** Analysis / decision-support document. Describes current-state findings and weighs migration options. No code changes are proposed by the document itself.
 > **Scope note:** Line/file references reflect the state of the branch this was written
 > against; treat them as pointers, not guarantees. PR references are point-in-time.
@@ -127,25 +127,26 @@ The largest body of code affected by any engine-default change is pyRevit's **ow
 
 ¹ authors a custom dialog via `forms.WPFWindow` subclassing and/or `wpf.LoadComponent`.
 
-### 4.7 The `rpw` question
-`pyrevitlib/rpw` (vendored *revitpythonwrapper* v1.7.4)  Verified usage on this branch:
+### 4.7 The `rpw` question
+`pyrevitlib/rpw` (vendored *revitpythonwrapper* v1.7.4) needs an explicit policy — silence here leaves a hidden IronPython dependency inside "ported" scripts. Verified usage on this branch:
 
-| Consumer          | What it actually uses |
-| ----------------- | ---------------------------------------------------- |
-| `pyrevit` core    | **One import**: [`revit/db/pickling.py`](https://github.com/ChrisCrosley/pyRevit-fork/blob/claude/code-review-proposal-0js5n4/revit/db/pickling.py) does `from rpw import doc` to read the active view — trivially replaceable with `pyrevit.revit.doc` |
-| Shipped tools (2) | `rpw.ui.forms.FlexForm` dialogs only (`cad_audit_check`, `Replace_Fonts`) — already in the §4.6 port scope |
-| Dev tests (1)     | Import-only smoke test |
+| Consumer            | What it actually uses |
+| ------------------- | ---------------------------------------------------- |
+| `pyrevit` core      | **One import**: [`pyrevitlib/pyrevit/revit/db/pickling.py`](https://github.com/ChrisCrosley/pyRevit-fork/blob/claude/code-review-proposal-0js5n4/pyrevitlib/pyrevit/revit/db/pickling.py) does `from rpw import doc` to read the active view — trivially replaceable with `pyrevit.revit.doc` |
+| Shipped tools (2)   | `rpw.ui.forms.FlexForm` dialogs only (`cad_audit_check`, `Replace_Fonts`) — already in the §4.6 port scope |
+| Dev tests (1)       | Import-only smoke test |
+| Third-party scripts | The real constituency — rpw was popular across pyRevit/RevitPythonShell/Dynamo; these are IronPython scripts served by the legacy engine |
 
-(A fourth apparent consumer, *Test RevitServer*, actually imports **`rpws`** — the separate, pure-HTTP Revit Server wrapper. `rpws`, `rjm`, and `rsparam` are distinct packages.)
+(A fourth apparent consumer, *Test RevitServer*, actually imports **`rpws`** — the separate, pure-HTTP Revit Server wrapper. `rpws`, `rjm`, and `rsparam` are distinct packages.)
 
-The IronPython-*only* coupling is confined to `rpw.ui.forms` (~1,085 lines: `FlexForm`, TaskDialog wrappers, OS dialogs, console), which loads `IronPython.Wpf` directly (2 of the 17  `AddReferenceToFileAndPath` sites) and subclasses WPF types — it hard-fails at import under  CPython, with no `_cpy` stub layer or engine dispatch. The remaining ~5,500 lines (`rpw.db`  collectors/transactions/parameter wrappers, `rpw.ui.Selection`) are plain `clr`/`System`  interop that would *likely* import under pythonnet, subject to the §6.5 idioms — but  "probably works, untested" is not a support tier.
+The IronPython-*only* coupling is confined to `rpw.ui.forms` (~1,085 lines: `FlexForm`, TaskDialog wrappers, OS dialogs, console), which loads `IronPython.Wpf` directly (2 of the 17 `AddReferenceToFileAndPath` sites) and subclasses WPF types — it hard-fails at import under CPython, with no `_cpy` stub layer or engine dispatch. The remaining ~5,500 lines (`rpw.db` collectors/transactions/parameter wrappers, `rpw.ui.Selection`) are plain `clr`/`System` interop that would *likely* import under pythonnet, subject to the §6.5 idioms — but "probably works, untested" is not a support tier.
 
-**Policy: freeze the entire library as legacy**, not just `rpw.ui`. Rationale:
-- Upstream is unmaintained; any porting/validation work means pyRevit adopting a second Revit  API wrapper that duplicates `pyrevit.revit` — the opposite of concentrating effort.
-- No shipped tool uses the non-UI half; certifying it under pythonnet serves no known consumer.  Third-party rpw scripts are IronPython scripts and keep the legacy engine regardless.
-- A split status ("`rpw.ui` legacy, rest supported") commits the team to the untested half  while real-world scripts use the library as a whole.
+**Policy: freeze the entire library as legacy**, not just `rpw.ui`. Rationale:
+- Upstream is unmaintained; any porting/validation work means pyRevit adopting a second Revit API wrapper that duplicates `pyrevit.revit` — the opposite of concentrating effort.
+- No shipped tool uses the non-UI half; certifying it under pythonnet serves no known consumer. Third-party rpw scripts are IronPython scripts and keep the legacy engine regardless.
+- A split status ("`rpw.ui` legacy, rest supported") commits the team to the untested half while real-world scripts use the library as a whole.
 
-Concretely: `rpw` is supported under the opt-in legacy IronPython engine only, excluded from  the CPython-supported surface, with `pyrevit.forms` documented as the replacement. Two  prerequisite actions: (1) replace the `pickling.py` import so core has zero rpw dependence  (and rpw could eventually be unbundled entirely); (2) port the two FlexForm tools during the  §4.6 extension pass. `FlexForm`'s niche — a multi-field input form composed in code, no XAML —  has no direct `pyrevit.forms` equivalent; if migration feedback shows demand, a small  `forms.FlexForm`-style helper on the Option B primitives is a far cheaper answer than porting  rpw.
+Concretely: `rpw` is supported under the opt-in legacy IronPython engine only, excluded from the CPython-supported surface, with `pyrevit.forms` documented as the replacement. Two prerequisite actions: (1) replace the `pickling.py` import so core has zero rpw dependence (and rpw could eventually be unbundled entirely); (2) port the two FlexForm tools during the §4.6 extension pass. `FlexForm`'s niche — a multi-field input form composed in code, no XAML — has no direct `pyrevit.forms` equivalent; if migration feedback shows demand, a small `forms.FlexForm`-style helper on the Option B primitives is a far cheaper answer than porting rpw.
 
 ---
 
