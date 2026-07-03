@@ -91,6 +91,27 @@ Critical consequences:
   **IPy2 vs IPy3 is global** — a build/config choice (`#if IPY342`) that rewrites the `.addin` manifest; the two IronPythons cannot run simultaneously.
 - The startup-script helper `create_ipyengine_configs(...)` sets only `clean`/`full_frame`/ `persistent` and **no** `"type"`, so extension startup scripts also resolve engine by shebang despite the misleading name.
 
+### 3.5 Engine lifecycle & isolation semantics — the flip changes more than syntax
+The two runtimes have structurally different lifecycle models, and flipping the default silently swaps one for the other. Verified in `ScriptEngineManager.cs`, `ScriptEngines.cs`, `IronPythonEngine.cs`, `CPythonEngine.cs`:
+
+**IronPython:** engines are cached in an AppDomain dictionary keyed by `SessionUUID : EngineType : CommandExtension` — i.e. **all commands in one extension share one cached engine; each extension gets its own.** `clean: true` in `bundle.yaml` forces a fresh engine per run; `persistent: true` lets globals survive between runs; the default scrubs scope references after each run (so Revit objects stored in globals can be GC'd) while keeping the engine — and its imported modules — warm. Scripts can detect recycling via the `__cachedengine__` builtin.
+
+**CPython:** there is **one process-global interpreter** — `PythonEngine.Initialize()` runs once, on the first `#! python3` execution, and pythonnet cannot host multiple interpreters (no sub-interpreter support). Every execution gets a fresh disposable scope (`Py.CreateScope` → exec → `Dispose`). There is no `CPythonEngineConfigs`; `clean`/`persistent` have no CPython meaning. "Refresh engine" is a full `PythonEngine.Shutdown()` — it resets interpreter state for *every* CPython command at once.
+
+| | IronPython (default) | IronPython (`clean: true`) | CPython `#! python3` |
+| --- | --- | --- | --- |
+| Script globals across runs | scrubbed (unless `persistent: true`) | gone (new engine) | always gone (scope disposed) |
+| Imported modules (`sys.modules`) | cached per extension's engine | fresh | cached **process-wide**, shared by all commands in all extensions |
+| `sys.path` | per extension's engine | fresh | rebuilt per run from a baseline + current bundle paths |
+| Isolation boundary | extension | command execution | none (one interpreter) |
+
+**Consequences for a CPython default:**
+- **`sys.modules` is shared and never evicted.** Extensions conventionally ship `lib/` directories with generic module names (`utils.py`, `config.py`). Per-extension IronPython engines make that safe by construction; under one shared interpreter, the first extension to `import utils` wins and later extensions silently receive *its* module. The resulting bugs are order-dependent ("works unless that other button ran first") — the worst kind to support. Secondary effects: stale modules during development (edits invisible until a full engine refresh) and shared module-level mutable state across buttons.
+- **`sys.path` is mostly handled — with one ordering bug.** `SetupSearchPaths` rebuilds `sys.path` per run (baseline + `PYTHONPATH` + current bundle paths), so paths don't accumulate. But the baseline is snapshotted per engine-wrapper *on first use* from the *current* `sys.path` — so if extension B's first CPython run happens after extension A ran, A's bundle paths are baked into B's baseline for the session. Fix: snapshot the pristine baseline once, globally, immediately after `PythonEngine.Initialize()`.
+- **Bundles relying on `clean: true` / `persistent: true` (e.g. smartbutton state) have no CPython equivalent** — those semantics must be documented as IronPython-only or given CPython analogs.
+
+**Mitigations (prerequisites for the §9.5 flip):** (1) fix the baseline-snapshot bug; (2) add a per-run **module-eviction policy** — after each execution, drop `sys.modules` entries whose `__file__` lives under an extension directory (pyRevit knows every extension path), keeping stdlib/pip modules warm while restoring IronPython-like isolation for extension code; (3) recommend namespaced lib packages (`import myext_lib.utils`) in the migration guide.
+
 ---
 
 ## 4. Quantifying the IronPython Coupling
@@ -588,7 +609,7 @@ pyRevit controls the loader, the wrapper library, **and all engines**: IronPytho
 
 1. **Ecosystem backward-compat break** (dominant risk): community extensions are largely IronPython 2 — as are pyRevit's own 441 shipped scripts (§4.6); a naive CPython default forces mass migration or a permanently split ecosystem. Mitigated by the per-extension declaration mechanism (§9.5), which keeps un-declared extensions on today's behavior.
 2. **Maintenance surface grows before it shrinks:** IPy2 and/or IPy3 + CPython + the C# layer, all at once, through a long transition.
-3. **pythonnet becomes load-bearing**, with its own quirks (GIL × Dispatcher × Revit API).
+3. **pythonnet becomes load-bearing**, with its own quirks (GIL × Dispatcher × Revit API) — and the shared-interpreter isolation model (§3.5) replaces per-extension engine isolation.
 4. **The `forms` rewrite is large and compatibility-sensitive**; custom-`WPFWindow` authors face a migration; CPython has no dialogs until it lands.
 5. **Behavior/perf differences** across the ~25 `revit/` modules require per-case validation.
 6. **Embedded-CPython packaging friction** (pip/site-packages, C-extension ABIs, version pins) — plus the per-engine `site-packages` split (§9.4 step 3) doubles the vendored-tree maintenance until the legacy engine sunsets.
@@ -635,7 +656,7 @@ estimates, since pacing depends entirely on maintainer availability.
 | 2   | **Finish the `pyrevitlib` port**: syntax residuals (§4.3), shim `clr.AddReferenceToFileAndPath` in `framework.py`, port the `out`-param sites and the §6.5 idioms in `revit/` | 2    | `pyrevitlib` imports cleanly and its unit suites pass under `CPY3123`; no IronPython-only CLR API remains outside `framework.py`                                                                                        |
 | 3   | **Split `site-packages/` per engine family**: a Python-3 tree for CPython (re-vendored modern releases) and a *frozen* Py2 tree for the legacy IronPython engine              | 2    | Each engine resolves only its own tree; Py2 backports (`six`, `pathlib2`, `scandir`, `unicodecsv`, ...) exist only in the frozen tree                                                                                   |
 | 4   | **Build the Option B `forms` layer** per §7.9/§7.10: pure-Python tiers first, C# host base + `BindableModel` last; port the shipped extensions (§4.6) as elements land        | 5    | Every public `_ipy.py` symbol either works under CPython or appears in a published coverage matrix; the §4.6 parity corpus passes under both engines; `settings_window.py`/`utils.py` no longer hard-require IronPython |
-| 5   | **Flip the default via the §9.5 mechanism**; keep the opt-in legacy IronPython engine, then sunset it once the ecosystem has moved                                            | 4    | Per-extension engine declaration shipped for ≥1 major release; all shipped extensions declare an engine; coverage matrix complete for §7.9 Tiers 0–4                                                                    |
+| 5   | **Flip the default via the §9.5 mechanism**; keep the opt-in legacy IronPython engine, then sunset it once the ecosystem has moved                                            | 4    | Per-extension engine declaration shipped for ≥1 major release; all shipped extensions declare an engine; coverage matrix complete for §7.9 Tiers 0–4; §3.5 isolation mitigations (baseline fix + module eviction) shipped |
 
 **Why step 3 is a split, not a drop.** An earlier draft said "drop the Py2 backports" — but the legacy IronPython 2 engine this plan keeps (§8.1) serves extensions that *import* those backports from the same shared `site-packages/`. One tree cannot serve both engines. The per-engine split resolves the contradiction: the CPython tree modernizes freely while the frozen IPy2 tree preserves the compatibility promise, and the frozen tree is deleted wholesale when the legacy engine sunsets. The engines already have separate resolution paths, so this is mostly a loader-path change.
 
@@ -651,6 +672,7 @@ Today's invariant: **absence of a shebang means IronPython.** A global default f
   (`extension.json` / bundle level, mirroring how bundles already override engine configs). An extension that declares `ironpython` keeps today's behavior indefinitely; one that declares `cpython` gets the new default for all its no-shebang scripts. Per-script shebangs still win, preserving today's per-button granularity.
 - **"Flipping the default" then means:** (a) shipped extensions declare `cpython` once ported (§9.4 step 4), and (b) only extensions that declare *nothing* are affected by any global default change — and that change can be deferred, staged by major version, or scoped to extensions created after a cutoff, rather than imposed on the installed base.
 - **Deprecation communication.** At least one major release where the IronPython default is announced as deprecated but *unchanged*, shipped alongside the published `forms` coverage matrix and a migration guide (the §6.5 checklist is most of it).
+- **Isolation semantics are part of the flip.** Moving a no-shebang script to CPython also moves it from per-extension engine isolation to one shared interpreter (§3.5). The §3.5 mitigations — the `sys.path` baseline fix and the extension-module eviction policy — ship *before* any default change, so flipped extensions keep IronPython-like isolation for their own code.
 - **Gating without central usage data.** pyRevit's telemetry server is a tool users deploy for their own fleets — there is no central instance to measure ecosystem readiness from. The flip decision must therefore rest on proxies the project controls: coverage-matrix completeness, the §4.6 parity corpus passing, shipped extensions fully declared, and community feedback through the deprecation release cycle.
 
 ---
@@ -659,6 +681,7 @@ Today's invariant: **absence of a shebang means IronPython.** A global default f
 
 > Paths reflect this branch's layout (`dev/pyRevitLabs.PyRevit.Runtime/...`); some project docs write `dev/pyRevitLabs/pyRevitLabs.PyRevit.Runtime/...` — same code, treat paths as pointers.
 
+- Engine lifecycle / caching (§3.5): `dev/pyRevitLabs.PyRevit.Runtime/ScriptEngineManager.cs`, `ScriptEngines.cs` (`TypeId`), `IronPythonEngine.cs` (`clean`/`persistent`), `CPythonEngine.cs` (`SetupSearchPaths`, scope-per-run).
 - Engine selection / shebang: `dev/pyRevitLabs.PyRevit.Runtime/scriptruntime.cs`,
   `ScriptEngines.cs` (`ScriptEngineType` enum), `IronPythonEngine.cs` (`#if IPY342`), `CPythonEngine.cs`, `ScriptEngineManager.cs`.
 - C# loader / bootstrap: `dev/pyRevitLoader/pyRevitAssemblyBuilder/**`
