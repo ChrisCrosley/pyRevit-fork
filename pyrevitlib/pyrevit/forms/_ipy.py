@@ -510,6 +510,32 @@ class WPFWindow(_WPFMixin, framework.Windows.Window):
         if args.Key == Input.Key.Escape:
             self.Close()
 
+    def focus_control(self, wpf_element):
+        """Ensure a control receives keyboard focus once the window is active.
+
+        pyRevit dialogs are borderless, transparent windows owned by the Revit
+        host window. That combination can leave the window hit-testable by the
+        mouse while its text fields never receive Win32 keyboard focus, so
+        typing does nothing even after the field is clicked. Requesting focus
+        before the window is shown is not enough; keyboard focus has to be
+        (re)asserted once the window is realized and activated.
+
+        Args:
+            wpf_element: control to receive keyboard focus.
+        """
+        self._focus_target = wpf_element
+        self.Loaded += self._assert_keyboard_focus  # pylint: disable=E1101
+        self.Activated += self._assert_keyboard_focus  # pylint: disable=E1101
+
+    def _assert_keyboard_focus(self, sender, args):  # pylint: disable=W0613
+        """Activate the window and move keyboard focus to the focus target."""
+        target = getattr(self, "_focus_target", None)
+        if target is None:
+            return
+        self.Activate()
+        target.Focus()
+        Input.Keyboard.Focus(target)
+
     def set_icon(self, icon_path):
         """Set window icon to given icon path."""
         self.Icon = utils.bitmap_from_file(icon_path)
@@ -1605,7 +1631,7 @@ class CommandSwitchWindow(TemplateUserInputWindow):
             self.button_list.Children.Add(my_button)
 
         self._setup_response()
-        self.search_tb.Focus()
+        self.focus_control(self.search_tb)
         self._filter_options()
 
     @staticmethod
@@ -2128,7 +2154,7 @@ class SearchPrompt(WPFWindow):
         self._switches = kwargs.get("switches", [])
         self._setup_response()
 
-        self.search_tb.Focus()
+        self.focus_control(self.search_tb)
         self.hide_element(self.tab_icon)
         self.hide_element(self.return_icon)
         self.search_tb.Text = ""
