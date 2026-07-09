@@ -102,6 +102,44 @@ in the core API). Exposing arbitrary execution requires closing that gap.
   machine but is explicitly weaker; the token model is the default once more
   than one process/person can reach the port.
 
+### Backward compatibility — two separate knobs, not one
+
+Routes today is fully unauthenticated. Existing deployments have user-defined
+`@api.route` handlers called by scripts and tools with no token. Making auth
+mandatory would break all of them. But a single global "bypass auth" flag is
+also wrong: it would let one config change silently expose the new
+remote-code-execution endpoints to the network. So the two concerns are
+separated:
+
+- **`routes.require_auth`** (new, default **false**). Gates *user-defined*
+  routes. Default false preserves today's behavior exactly — existing custom
+  routes keep working with no token. Operators who want their own routes
+  protected set it true. This is the "bypass to preserve current functionality"
+  switch, and it only ever governs the pre-existing route surface.
+
+- **The privileged endpoints** (`/eval`, `/commands`, write mode) are their own
+  opt-in feature, following the existing `loadCoreAPI` precedent
+  (`ConfigsLoadCoreAPIKey`). They are **off by default**, and when enabled they
+  **always require a valid token** — *independent of* `routes.require_auth`.
+  `require_auth = false` must **not** unlock unauthenticated `/eval`. The RCE
+  surface cannot be exposed token-free by any global bypass; the only way to
+  reach it is a live paired token.
+
+Net effect:
+
+| Config | Existing custom routes | `/eval` + `/commands` |
+| --- | --- | --- |
+| default (both off) | work, no token (unchanged) | not served |
+| `require_auth = true` | require token | not served |
+| exec feature enabled | per `require_auth` | require token (always) |
+
+An explicit `routes.exec_allow_no_auth` escape hatch (for an isolated CI box)
+could exist, but it must be a distinct, loudly-named flag — never the same
+switch used to preserve existing route behavior — and is out of scope for v1.
+
+Default host should be forced/recommended to `127.0.0.1` when the exec feature
+is enabled; note the current Routes default host is `""` (all interfaces).
+
 ## Transactions and undo history
 
 The Routes API uses **no transactions today** — confirmed: there are zero
