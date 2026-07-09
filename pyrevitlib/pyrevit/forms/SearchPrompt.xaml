@@ -46,7 +46,7 @@
                     <ControlTemplate TargetType="{x:Type TextBoxBase}">
                         <Border Name="Border"
                                 Padding="2"
-                                Background="{x:Null}"
+                                Background="Transparent"
                                 BorderBrush="{x:Null}"
                                 BorderThickness="0" >
                             <ScrollViewer Margin="0" x:Name="PART_ContentHost"/>
@@ -94,17 +94,18 @@
                                 Foreground="LightGray"
                                 Margin="10,0,0,0"
                                 KeyboardNavigation.IsTabStop="False"/>
-                    <StackPanel Orientation="Horizontal">
-                        <TextBox x:Name="search_tb"
-                                 Margin="10,0,0,0"
-                                 Text="matc"
-                                 TextChanged="search_txt_changed"/>
+                    <DockPanel LastChildFill="True">
                         <TextBox x:Name="wordsmatch_tb"
+                                 DockPanel.Dock="Right"
                                  IsEnabled="False"
                                  Foreground="LightGray"
                                  Text="- Example Match"
                                  KeyboardNavigation.IsTabStop="False"/>
-                    </StackPanel>
+                        <TextBox x:Name="search_tb"
+                                 Margin="10,0,0,0"
+                                 Text="matc"
+                                 TextChanged="search_txt_changed"/>
+                    </DockPanel>
                 </Grid>
             </DockPanel>
             <TextBlock x:Name="tooltip_tb" Visibility="Collapsed" Margin="20" Text="Tooltip" TextWrapping="Wrap"/>

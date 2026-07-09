@@ -72,7 +72,7 @@
                         <Border Name="Border"
 								Padding="2"
 								CornerRadius="10"
-								Background="{x:Null}"
+								Background="Transparent"
 								BorderBrush="#66ffffff"
 								BorderThickness="1" >
                             <Grid Margin="5,0,5,0">
