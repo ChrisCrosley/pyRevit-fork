@@ -409,20 +409,46 @@ every engine.
   pure-Python `INotifyPropertyChanged` shim (if the prototype proves binding to Python objects
   works on pyRevit's pythonnet 3 fork) **or** a C# `BindableModel`/`DataTable` adapter (if it
   doesn't). The shared-package structure makes this swap invisible to the feature modules.
+- **Modeless / host-plumbing tier** (`ProgressBar`, dockable panels): the **C# window-host base
+  is unconditional** — `ExternalEvent` marshaling, window ownership/parenting, theming (the
+  `ScriptOutput` pattern, §9.2) ship in C# regardless of the binding-prototype outcome. Only the
+  *binding backend* is gated; a spike pass does not mean "no C# anywhere."
+
+**Why the gate ordering is not a pure-Python preference.** The prior UX argument for the C# layer
+compared it against *unassisted DIY pythonnet* (manual `FindName`, hand-wired events, hand-rolled
+`DataTable` conversion), under the premise that binding-to-Python-objects was impossible. It never
+compared C# against a *working, pyRevit-shipped* pure-Python `Reactive` shim — the world the spike
+tests for. If the shim works, it reproduces **today's IronPython authoring model exactly**
+(subclass `Reactive`, `@reactive` properties, `{Binding name}` in XAML), so existing custom
+dialogs port nearly unchanged with no new API to learn — in that world the shim is the *better*
+author UX, not a consolation. If it doesn't work (or is too slow), `BindableModel` is the only way
+to get declarative binding and wins outright. Each option is the UX winner in the world where it
+is chosen. Note also that the "one implementation serves all engines" maintenance argument for C#
+is now carried by the shared-package structure itself (§9.1) — feature modules are single-source
+either way.
 
 ### 9.4 The prototype gate (must pass before committing the binding backend)
 
-A sharply-scoped spike must demonstrate, **on pyRevit's pythonnet fork**:
+A sharply-scoped spike must demonstrate, **on pyRevit's pythonnet fork** — and **pass = fidelity
+AND performance**, since a correct-but-unusable shim is a fail:
 1. **WPF binding fidelity to a Python (or `DynamicObject`) source** — not just `{Binding name}`
    happy path, but `DataTemplate` resolution, `DataTrigger`s (the parameter pickers use them),
    validation, and `ICollectionView` sort/group. `SelectFromList`'s real XAML is the fixture.
-2. **The chatty-callback path under the GIL** — a **modeless `ProgressBar` driving Revit API
+2. **Binding performance on realistic loads** — a ~2,000-item `SelectFromList` (sheets-scale) and
+   a chatty `ICommand.CanExecute` loop: `CommandManager.RequerySuggested` re-queries frequently on
+   the UI thread, and with a Python source every call crosses the pythonnet bridge and takes the
+   GIL (§8.3.5). This is the strongest surviving argument for the C# backend even if fidelity
+   passes; it must be measured, not assumed.
+3. **The chatty-callback path under the GIL** — a **modeless `ProgressBar` driving Revit API
    calls through `ExternalEvent`** (the §8.3.4 combination), measuring GIL × Dispatcher ×
    Revit-context.
 
-**Fallback if it fails:** `DataTable`-backed binding + imperative control access covers the
-native/leaf and list tiers; only reactive-MVVM custom dialogs are lost, and the approach degrades
-to "C# host plumbing + `DataGrid`" rather than collapsing.
+**Outcomes.** Fidelity + perf pass → pure-Python shim. Fidelity passes, perf fails → **hybrid**:
+shim for small value-input dialogs, C# `BindableModel`/bindable collections for large
+`ItemsSource` and command-heavy dialogs (the backend seam hides the split). Fidelity fails →
+`DataTable`-backed binding + imperative control access covers the native/leaf and list tiers;
+only reactive-MVVM custom dialogs are lost, and the approach degrades to "C# host plumbing +
+`DataGrid`" rather than collapsing.
 
 ---
 

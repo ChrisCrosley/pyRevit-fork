@@ -136,25 +136,39 @@ and do **not** eagerly load `wpf`.
 **Goal.** Decide the reactive/binding backend bet **before** building it. Highest-risk, smallest
 effort — do it early.
 
+**What is and isn't at stake.** The spike decides only the **binding backend** (how WPF sees
+Python-driven data). The **C# window-host plumbing** for the modeless tier — `ExternalEvent`
+marshaling, window ownership/parenting, theming (R§9.2's `ScriptOutput` pattern) — is
+**unconditional**: it ships regardless of the spike outcome (R§9.3). Do not read a spike pass as
+"no C# anywhere."
+
 **Key tasks.** Build a throwaway spike on pyRevit's pythonnet fork demonstrating:
 1. **WPF binding fidelity to a Python / `DynamicObject` source** using `SelectFromList.xaml` as
    the fixture — `{Binding name}`, the `DataTrigger`s the parameter pickers use, `DataTemplate`
    resolution, validation, and `ICollectionView` sort/group. Not just the happy path.
-2. **A modeless `ProgressBar` driving Revit API calls through `ExternalEvent`** — measure
+2. **Binding performance on realistic loads** — a `SelectFromList` over ~2,000 items (a
+   sheets-scale list) and a chatty `ICommand.CanExecute` re-query loop
+   (`CommandManager.RequerySuggested` hammers the UI thread; with a Python source every call
+   crosses the pythonnet bridge and takes the GIL). Correct-but-unusable is a **fail**.
+3. **A modeless `ProgressBar` driving Revit API calls through `ExternalEvent`** — measure
    GIL × Dispatcher × Revit-context (R§8.3.5), reusing the Phase 1 `__namespace__` pattern.
 
 **Depends on.** Phase 1 (`__namespace__` pattern), Phase 2 (structure to host the spike cleanly).
 
-**Exit criteria — a decision, recorded in the research doc:**
-- **Pass** → the `reactive` backend is a **pure-Python `INotifyPropertyChanged` shim**; Phase 4's
-  data-bound tier stays pure Python.
-- **Fail** → the `reactive` backend is a **C# `BindableModel`/`DataTable` adapter** (R§9.2, the
-  `ScriptOutput`/`PyRevitOutputWindow` pattern); build the two C# primitives (window-host base +
-  `BindableModel`/bindable collections) and expose them through the backend. Feature modules are
-  untouched either way.
+**Exit criteria — a decision, recorded in the research doc. Pass = fidelity AND performance:**
+- **Pass (both)** → the `reactive` backend is a **pure-Python `INotifyPropertyChanged` shim**;
+  Phase 4's data-bound tier stays pure Python. This is also the better author UX in this world:
+  it preserves today's IronPython authoring model (subclass `Reactive`, `{Binding}` by name), so
+  existing custom dialogs port nearly unchanged with no new API.
+- **Fidelity passes, performance fails** → **hybrid**: the pure-Python shim serves small
+  value-input dialogs; large-`ItemsSource` and command-heavy dialogs route through the C#
+  `BindableModel`/bindable collections. The backend seam hides the split from feature modules.
+- **Fidelity fails** → the `reactive` backend is the **C# `BindableModel`/`DataTable` adapter**
+  (R§9.2); build `BindableModel`/bindable collections and expose them through the backend.
+  Feature modules are untouched in every outcome.
 
-**Verification.** The spike itself is the verification; capture results (and any perf numbers) in
-`CPYTHON_MIGRATION_RESEARCH.md` §9.4.
+**Verification.** The spike itself is the verification; capture results **including the perf
+numbers** (items × bind time, CanExecute round-trip rate) in `CPYTHON_MIGRATION_RESEARCH.md` §9.4.
 
 ---
 
@@ -174,7 +188,7 @@ stub to real, add to `__all__`, port the shipped extensions that use them, and k
 | 2 | `WPFWindow`/`WPFPanel` base via pure-Python `load_xaml_component` (XamlReader + name-scope wiring) | XAML loader | the largest *new* code; no binding yet |
 | 3 | `ask_for_string`/`_date`/`_number_slider` | XAML loader | small imperative windows |
 | 4 | `SelectFromList`, `CommandSwitchWindow`, `select_*`, parameter/color/image selectors | **binding backend (Phase 3 decision)** | the data-bound tier — the crux |
-| 5 | `ProgressBar`, `WarningBar`, dockable panels (`WPFPanel` register/open/close/toggle) | `ExternalEvent`/`__namespace__` + GIL | modeless; depends on Phase 1 |
+| 5 | `ProgressBar`, `WarningBar`, dockable panels (`WPFPanel` register/open/close/toggle) | **C# window-host base** (unconditional, R§9.3) + `ExternalEvent`/`__namespace__` + GIL | modeless; depends on Phase 1 |
 
 Then `settings_window.py` (subclasses `WPFWindow`) works once Tier 2 lands; verify it under
 CPython.
@@ -182,8 +196,11 @@ CPython.
 **Key tasks.** Implement the pure-Python XAML loader in `backends/_cpy.py` (parse via
 `XamlReader`/`Application.LoadComponent`, copy tree onto `target`, walk the name-scope to wire
 `x:Name` controls + connect handler methods — R§8.3.2). Wire the reactive backend per Phase 3.
-Port shipped extensions (the R§7 corpus: 167 forms-consumers) as each tier lands; freeze the two
-`rpw.ui.forms` tools onto legacy (R§7.1).
+**Build the C# window-host base for Tier 5** (modeless `ExternalEvent` marshaling, window
+ownership/parenting to the Revit window, MahApps/dark-theme resources — the `ScriptOutput`
+pattern, R§9.2); this ships regardless of the Phase 3 binding outcome. Port shipped extensions
+(the R§7 corpus: 167 forms-consumers) as each tier lands; freeze the two `rpw.ui.forms` tools
+onto legacy (R§7.1).
 
 **Critical files.** `forms/backends/_cpy.py` (grows from stub to real), the feature modules (they
 should need *no* per-engine edits), `forms/settings_window.py`.
