@@ -57,6 +57,36 @@ Seven phases, each with **goal · key tasks · critical files · depends-on · e
 
 **Goal.** Split `pyrevit.forms` into the shared-package structure (R§9.1) **without changing any behavior** — a pure reorganization on IronPython. This is the skeleton that makes CPython enablement incremental and drift-proof.
 
+**Target layout.** Only the `backends/` core is duplicated per engine; every feature module is written once and imports its one engine-specific operation from `_backend`:
+
+```
+forms/
+  __init__.py            # facade: builds public namespace, explicit __all__
+  _backend.py            # selects & re-exports the active engine backend
+  backends/
+    __init__.py
+    _ipy.py              # IronPython core: wpf.LoadComponent, pyevent, clr refs
+    _cpy.py              # CPython core: XamlReader loader, event shim (Phase 4)
+  base.py                # _WPFMixin, WPFWindow, WPFPanel, WindowToggler, constants
+  reactive.py            # reactive, Reactive, TemplateListItem, ParamDef
+  dockable.py            # _WPFPanelProvider + register/get/open/close/toggle panel fns
+  dialogs.py             # TemplateUserInputWindow, SelectFromList, CommandSwitchWindow,
+                         #   GetValueWindow, SearchPrompt
+  promptbars.py          # TemplatePromptBar, WarningBar, ProgressBar
+  selection.py           # *Option classes + select_* Revit element helpers
+  alerts.py              # alert, alert_ifnot, ask_for_* wrappers, ask_to_use_selected,
+                         #   ask_for_color, inform_wip
+  checks.py              # check_workshared/selection/familydoc/modeldoc/... guards
+  pickers.py             # pick_file/pick_folder/save_file/pick_excel_file/save_excel_file
+  notify.py              # toast, show_balloon, result_item_result_clicked
+  utils.py               # (existing) bitmap/xaml helpers — guard wpf import, route
+                         #   XAML load via backend (key task 4)
+  toaster.py             # (existing, unchanged — pure subprocess, engine-agnostic)
+  settings_window.py     # (existing, unchanged here — subclasses WPFWindow, so it works
+                         #   under CPython once Phase 4 Tier 2 lands)
+  *.xaml, pyrevit-toast.exe
+```
+
 **Key tasks (mirrors the refactor note's steps 1–2, corrected).**
 1. **Rebase on Phase 0** so the extraction inherits the already-fixed `_ipy.py` (the `__bool__` aliases and `list()`-wrapped views) — do **not** reintroduce them.
 2. **Carve the skeleton without moving logic:** add `_backend.py` + `backends/{_ipy,_cpy}.py`; `_ipy` backend delegates `load_xaml_component` → `wpf.LoadComponent` and `make_property_changed_event` → `pyevent.make_event`, and re-exports the assembly refs. Point `_ipy.py`'s two `load_xaml` methods **and `utils.py`** at the backend. IronPython behavior byte-for-byte unchanged.
