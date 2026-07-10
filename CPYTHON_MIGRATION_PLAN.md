@@ -202,16 +202,16 @@ XAML load + named-control binding (the risk center), then Tier 4 binding.
 
 ---
 
-## Phase 5 — Dependency & packaging mechanism  ·  Size 2
+## Phase 5 — Dependency, packaging & interop modernization  ·  Size 2–3
 
-**Goal.** Make third-party dependencies work sanely under one shared interpreter, and split the
-vendored tree per engine. Must ship **before** the Phase 6 flip. (R§6)
+**Goal.** Make third-party dependencies work sanely under one shared interpreter, split the
+vendored tree per engine, and modernize the vendored/interop libraries. Must ship **before** the
+Phase 6 flip. (R§6, R§7.2)
 
-**Key tasks.**
+**Key tasks — packaging & isolation.**
 - **Split `site-packages/` per engine family** (R§6.4.5): a modern Py3 tree for CPython
-  (re-vendored current releases) + a *frozen* Py2 tree for legacy IronPython (the backports live
-  only there). Each engine resolves only its own tree — a loader-path change, since resolution
-  paths already differ.
+  (re-vendored current releases) + a *frozen* Py2 tree for legacy IronPython. Each engine
+  resolves only its own tree — a loader-path change, since resolution paths already differ.
 - **Wire pip into the embeddable distro + a managed writable user-site**, and add a `pyrevit`
   CLI command (`pyrevit env pip install …`) — the distro ships none today (R§6.1).
 - **Curate + pin the shared Py3 env** (platform-SDK model, R§6.4.1), ABI-matched to CPython 3.12
@@ -223,21 +223,43 @@ vendored tree per engine. Must ship **before** the Phase 6 flip. (R§6)
   eviction policy **split per R§6.5** (evict extension-namespace *code*; never evict
   site-packages/pip/C-ext modules).
 
+**Key tasks — dependency modernization (R§7.2).**
+- **Drop from the Py3 tree** (stdlib in 3.12): `enum`, `pathlib.py`+`pathlib2`, `scandir`,
+  `unicodecsv`, `importlib_resources`, `pytz`→`zoneinfo`, `six`. `pyevent.py` → frozen tree only
+  (IronPython-only; replaced by the forms reactive backend, Phase 4).
+- **Unbundle orphans** (0 first-party consumers): `slackclient`, `bson`, `sqlalchemy`, `munch`.
+- **Clean swap:** `xlrd`+`xlsxwriter` → **openpyxl** in `interop/xl.py` (also fixes xlrd's `.xlsx`
+  drop). Note: no Excel COM exists in pyRevit, so this is pure library modernization.
+
+**Key tasks — interop netcore strategy (the fork, R§7.2 / R§10.1).** The .NET/native interop
+assemblies are missing on Revit 2025+ (.NET 8). Resolve per module, don't blanket-build:
+- **`interop/dxf.py`** (`IxMilia.Dxf`) → **retire for `ezdxf`** (pip). Rewrite the DXF-building
+  consumers (small surface). Removes a shipped assembly.
+- **`interop/rhino.py`** (`Rhino3dmIO`, native) → **retire for `rhino3dm`** (pip). Removes native
+  binary + netcore gap + opt-in risk; rewrite consumers (1 DevTools test today).
+- **`interop/ifc.py`** (`Ifc.Net`) → **build a netcore assembly** (or re-derive the `Ifc4` schema
+  enums). *Not* an ifcopenshell swap — it configures Revit's native IFC exporter.
+- **`interop/adc.py`** (Desktop Connector) → stays a managed-assembly load (proprietary, no alt);
+  its CLR loading already uses the Phase 0 shim.
+
 **Critical files.** `pyRevitfile` (`[deployments]`, `[engines.*]`), the CLI
 (`dev/pyRevitLabs/pyRevitLabs.PyRevit/`), `CPythonEngine.cs` (`StoreSearchPaths` baseline fix +
 the eviction hook), `pyrevit/__init__.py` (`MISC_LIB_DIR`), `extensions/extpackages.py`
-(`dependencies` → pip declaration).
+(`dependencies` → pip declaration), `pyrevit/interop/{xl,dxf,rhino,ifc}.py` and their consumers.
 
-**Depends on.** Phase 0 (engine correctness). Can run in parallel with Phases 2–4.
+**Depends on.** Phase 0 (engine correctness + the CLR shim). Can run in parallel with Phases 2–4.
 
 **Exit criteria.** Each engine resolves only its own tree; `pyrevit env pip install numpy` works
 into the CPython env; the eviction policy demonstrably drops a colliding `get_door` (R§5 example)
-while keeping numpy warm across runs; the baseline snapshot bug is fixed (verified by the B-after-A
-ordering case).
+while keeping numpy warm across runs; the baseline snapshot bug is fixed (B-after-A ordering
+case); the Py3 tree no longer contains the dropped backports/orphans; `interop.dxf`/`rhino` import
+and function on a .NET 8 host via their pip replacements (or are explicitly deferred with `ifc`).
 
 **Verification.** Suite tests: two extensions with a same-named `lib/get_door.py` — assert each
 run gets its own; import numpy across two extensions in a session — assert one shared instance,
-never evicted; run B after A — assert B's baseline `sys.path` is pristine.
+never evicted; run B after A — assert B's baseline `sys.path` is pristine. For interop: exercise
+`interop.dxf`/`rhino`/`xl` from a `#! python3` button on a Revit 2025+ host (the netcore case that
+fails today).
 
 ---
 

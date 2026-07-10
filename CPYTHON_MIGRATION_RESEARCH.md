@@ -279,6 +279,39 @@ default flip and double as the parity test corpus.
 
 Both are deletion candidates when the legacy engine sunsets.
 
+### 7.2 Dependency modernization — swap, drop, or bump
+
+Beyond compatibility, the CPython move opens deliberate modernization. Consumer counts below
+are first-party `.py` (telemetry server is Go, so vendored packages it doesn't use are dead
+weight). Correction to the generic §12 checklist: **pyRevit has no Excel COM** — `interop/xl.py`
+is pure-Python `xlrd`/`xlsxwriter`, and there is no `Microsoft.Office.Interop.Excel`/`GetActiveObject`
+in first-party code, so "Excel COM → openpyxl" does **not** apply; the real Excel issue is xlrd's
+`.xlsx` deprecation below.
+
+**The headline: CPython turns the worst `interop` dependency — .NET/native assemblies missing on
+.NET 8 (Revit 2025+) — into clean pip installs.** Today `interop.rhino`/`dxf`/`ifc` load managed
+(and, for Rhino, **native**) assemblies that ship only in the netfx lib set, so they can't import
+on Revit 2025+ on *any* engine (§10.1 known issue). This is a fork in strategy: **build netcore
+copies** vs **retire the .NET wrapper for a pip-native Python library**.
+
+| Today | Modern alternative | Used by | Fit / cost |
+| --- | --- | --- | --- |
+| `xlrd`+`xlsxwriter` (`interop/xl.py`, file I/O) | **openpyxl** | `xl.py` (71 lines) | **Clean swap.** Also fixes xlrd 2.0 dropping `.xlsx`. |
+| `IxMilia.Dxf` (.NET, missing on .NET 8) via `interop/dxf.py` | **ezdxf** (pip) | thin 10-line loader; consumers use `IxMilia` API | **Strategic swap** — becomes `pip install ezdxf`; rewrite the DXF-building consumers (small surface). |
+| `Rhino3dmIO` (.NET + **native** `rhino3dmio_native.dll`, missing on .NET 8) via `interop/rhino.py` | **rhino3dm** (pip, McNeel) | thin 10-line loader; 1 DevTools test | **Strategic swap** — kills native-binary + netcore + opt-in-risk at once; rewrite consumers. |
+| `Ifc.Net` via `interop/ifc.py` | ~~ifcopenshell~~ — **not a swap** | `ifc.py` (318 lines) + 1 dev example | **Keep or netcore-build.** `ifc.py` uses `Ifc4` schema types to configure Revit's *native* IFC exporter (parses Revit's JSON, builds `IFCExportOptions`); ifcopenshell is a standalone authoring toolkit, a different job. This one still needs a netcore assembly, not a pip lib. |
+| Autodesk Desktop Connector (`interop/adc.py`) | none (proprietary) | ADC integration | Stays a managed-assembly load. |
+
+**site-packages modernization:**
+
+| Class | Packages | Action |
+| --- | --- | --- |
+| Py2 backports → stdlib | `enum`, `pathlib.py`+`pathlib2`, `scandir`, `unicodecsv`, `importlib_resources`, `pytz`→`zoneinfo` | **Drop from the Py3 tree** (stdlib in 3.12); keep only in the frozen legacy tree. |
+| Py2-only | `six.py`; `pyevent.py` | Drop `six`; `pyevent.py` is IronPython-only (§8.3.1) → frozen tree, replaced by the forms reactive backend. |
+| Orphaned (0 first-party consumers) | `slackclient`, `bson`, `sqlalchemy`, `munch` | **Unbundle candidates** — dead weight in the Python tree. If Slack is revived, `slackclient` is the *deprecated* SDK → `slack_sdk`. |
+| Unmaintained but used | `docopt` (2 consumers) | → `argparse` if touched anyway; low priority. |
+| Keep (maintained, pure-Python) | `requests`+stack, `werkzeug`, `websocket`, `xlsxwriter`, `pyparsing`, `natsort`, `sortedcontainers`, `filelock`, … | Re-vendor current majors (or pip) into the curated Py3 env; watch major-version breaking changes (§11). |
+
 ---
 
 ## 8. The `forms/` Layer — the Long Pole
