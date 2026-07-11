@@ -162,7 +162,7 @@ Then `settings_window.py` (subclasses `WPFWindow`) works once Tier 2 lands; veri
 - **Split `site-packages/` per engine family** (R§6.4.5): a modern Py3 tree for CPython (re-vendored current releases) + a *frozen* Py2 tree for legacy IronPython. Each engine resolves only its own tree — a loader-path change, since resolution paths already differ.
 - **Wire pip into the embeddable distro + a managed writable user-site**, and add a `pyrevit` CLI command (`pyrevit env pip install …`) — the distro ships none today (R§6.1).
 - **Curate + pin the shared Py3 env** (platform-SDK model, R§6.4.1), ABI-matched to CPython 3.12 `win_amd64`.
-- **Declaration + conflict-check** (R§6.4.3): let extensions declare pip requirements resolving against the shared env, failing loud on incompatible demands. Document per-extension bundling as an unsupported footgun.
+- **Declaration + conflict-check** (R§6.4.3, author-facing semantics in R§6.4's "third-party extension authors" table): extensions declare pip requirements as version constraints in extension metadata (e.g. `"requirements": ["numpy>=2,<3"]`); pyRevit resolves and installs into the shared env **at extension-install time** (never at script runtime), **validates at load time**, and fails loud with an actionable error on incompatible demands. Document per-extension bundling as an unsupported footgun and namespaced vendoring (`myext_lib/vendored/…`, pure-Python only) as the offline fallback.
 - **Ship the R§5 isolation mitigations:** fix the `sys.path` baseline snapshot; add the module eviction policy **split per R§6.5** (evict extension-namespace *code*; never evict site-packages/pip/C-ext modules).
 
 **Key tasks — dependency modernization (R§7.2).**

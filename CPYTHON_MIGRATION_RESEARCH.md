@@ -125,6 +125,19 @@ Concrete pieces:
 4. **Per-extension bundling documented as an unsupported footgun** — works in single-extension dev, breaks under multi-extension production; C-extensions can't be isolated at all.
 5. **Per-engine `site-packages` split** — a modern Py3 tree for CPython and a *frozen* Py2 tree for the legacy IronPython engine (the Py2 backports `six`, `pathlib2`, `scandir`, `unicodecsv`, … live only in the frozen tree, deleted wholesale when legacy sunsets).
 
+#### What this means for third-party extension authors
+
+The practical question — *"my extension needs a pip package; do I commit it to my repo, or does pyRevit pip-install it?"* — has a designed answer: **neither ship it nor ask users to install it manually — declare it, and pyRevit installs it.** The extension's git repo carries code only; its metadata declares pip requirements as version *constraints* (e.g. `"requirements": ["numpy>=2,<3", "openpyxl"]`, extending the `extension.json` `dependencies` concept). pyRevit resolves the declaration against the shared environment and installs what's missing **at extension-install time** (extension manager / CLI — never at script runtime, so no network surprises mid-session), then **validates at load time** and fails loud on conflict: if extension A demands `numpy<2` and B demands `numpy>=2`, the user gets an actionable error instead of today's silent first-import-wins. One version per package process-wide is not a policy preference but the physical constraint (§6.2–§6.3) — the declaration model is the only one the runtime can actually honor.
+
+| Author's option | Verdict | Why |
+| --- | --- | --- |
+| **Declare** pip requirements in extension metadata | **The supported path** | pyRevit installs into the shared env at install time, conflict-checks at load; deps keep receiving pip security updates instead of fossilizing in the repo. |
+| **Vendor inside your own package namespace** (`myext_lib/vendored/pkg/`, imported as `from myext_lib.vendored import pkg`) | Acceptable fallback (offline installs, tiny unmaintained helpers) | The `sys.modules` key is `myext_lib.vendored.pkg` — collision-free by construction, and the §6.5 eviction policy handles it correctly as extension-namespace code. **Pure-Python only, never C-extensions.** |
+| **Bundle top-level in `lib/`** (`import requests` resolves to your private copy) | **The documented footgun** | First-import-wins across extensions (§6.2); for C-extensions also ABI-coupled to the embedded CPython and physically unable to coexist with another version (§6.2). Appears to work in single-extension testing, breaks in multi-extension production. |
+| Instruct users to pip-install into a system CPython + `PYTHONPATH` | Today's workaround, not a target | Works because `CPythonEngine` appends `PYTHONPATH` dirs, but is manual, per-machine, and ABI-fragile. Superseded by the declaration model. |
+
+Until the Phase 5 mechanism ships, the honest status is that **no supported mechanism exists** — the workarounds above (namespaced vendoring, `PYTHONPATH`) are the interim guidance, and the migration guide should say so explicitly.
+
 ### 6.5 The eviction-policy hazard (a latent bug in the §5 mitigation)
 
 The §5 module-eviction rule ("evict `sys.modules` entries under an extension dir") correctly fixes first-party name collisions (§5 `get_door` example) — safe because that code is pure-Python and re-importable. It is **actively unsafe** the moment it touches a C-extension: numpy/pandas run C init exactly once; evicting and re-importing corrupts/crashes them (numpy refuses re-init). If an extension bundles numpy under its own `lib/`, the naive rule targets it. **Required refinement:** evict pure-Python *extension-namespace code*; **never** evict site-packages/pip/C-extension modules — maintain an explicit extension-namespace allowlist to evict and keep everything else warm. **Evict code; never evict packages.**
