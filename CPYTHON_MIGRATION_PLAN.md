@@ -42,14 +42,15 @@ Seven phases, each with **goal · key tasks · critical files · depends-on · e
 - **Port the 55 generic-collection sites** (~16 lib first, then ~39 ext) to explicit `List[T]([...])`; wrap returned .NET collections in `list()` where indexed/mutated.
 - **Settle `__namespace__`** by resolving the two open questions on `FamilyLoaderOptionsHandler` (R§10.1): (a) which interfaces actually require it under pyRevit's pythonnet fork; (b) whether pinning a CLR type collides on reload (the type map survives a `sys.modules` clear — the same shared-process-state class as R§5/R§6). Produce a documented rule + a reload-safe pattern, then apply to the 33 missing sites (lib before ext).
 - Survey/spot-fix the smaller classes as found: `IDisposable` `with` (4), `.Item[...]` indexers, enum→int, overload/`System.Func` typing.
+- **Fix the .NET-side `object`-param seams** (R§10.1 known field bug — `output.print_table()` silently empty under CPython): add a `PyObject` branch to `ToRows`/`ToList` in `ScriptOutput.cs` (iterate the proxy under `Py.GIL()`), replace `print_table`'s silent early return with the visible warning `print_html_table` already emits, and audit the remaining `object`-typed snake_case APIs (`inject_to_head`/`inject_to_body`/`inject_script`/`add_style` `attribs`). This class is invisible to the AST checker (the Python call site is idiomatic); coverage comes from the in-Revit suite, not a checker rule.
 
-**Critical files.** `dev/scripts/check_py3_compat.py` (new rules), `revit/db/*`, `revit/events.py` (the inconsistent `__namespace__` file), the DevTools "Test CPython Namespace" button, plus the ~39 extension sites.
+**Critical files.** `dev/scripts/check_py3_compat.py` (new rules), `revit/db/*`, `revit/events.py` (the inconsistent `__namespace__` file), `dev/pyRevitLabs.PyRevit.Runtime/ScriptOutput.cs` (`ToRows`/`ToList` + the `object`-param APIs), the DevTools "Test CPython Namespace" button, plus the ~39 extension sites.
 
 **Depends on.** Phase 0 (checker + harness).
 
 **Exit criteria.** Both new checker rules at zero for `pyrevitlib`; the `__namespace__` rule documented (needed-per-interface + reload-safe) and applied to all lib sites; the in-Revit suite gains passing collection + interface-callback tests on CPython. Extension sites tracked (not necessarily all fixed — most are IronPython-only until they run under CPython).
 
-**Verification.** Add suite tests: construct a `List[ElementId]` from a Python list and pass to a Revit API call; register an `IExternalEventHandler`/`ISelectionFilter` implemented in Python and receive a live callback; **reload the command twice** and confirm no duplicate-type-name error.
+**Verification.** Add suite tests: construct a `List[ElementId]` from a Python list and pass to a Revit API call; register an `IExternalEventHandler`/`ISelectionFilter` implemented in Python and receive a live callback; **reload the command twice** and confirm no duplicate-type-name error; **per-engine output tests** — `print_table`, `print_html_table`, and an `inject_to_head`/`add_style` call with an `attribs` dict must produce visible output under CPython, not a silent no-op (the R§10.1 field bug's regression test).
 
 ---
 

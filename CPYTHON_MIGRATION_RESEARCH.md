@@ -230,6 +230,8 @@ Split `pyrevit.forms` along **two axes**: a horizontal *engine-core vs shared-fe
 
 The original analysis's *chosen* direction was a **C#-assisted UI API** (`forms.DataGrid` over a `DataTable`; `forms.BindableModel` — a C# `INotifyPropertyChanged`/`DynamicObject` core WPF binding *can* see), precisely because binding-to-Python-objects (§8.3.1) may be unsolvable in pure Python under pythonnet. The `ScriptOutput`/`PyRevitOutputWindow` console already proves the pattern: a C#-hosted WPF window driven from Python via a thin `__getattr__` wrapper, working on every engine.
 
+**Design rule for any C# API serving both engines** (learned from the pattern's one field failure, the `print_table` bug in §10.1): **never type-sniff an `object` parameter.** Under IronPython a Python list/dict *is* a CLR collection and `value as IEnumerable` succeeds; under pythonnet the same argument arrives as a `PyObject` proxy and the cast silently yields `null`. C# surfaces like `BindableModel`/`DataGrid` must therefore either take **typed parameters** (forcing pythonnet conversion), handle **`PyObject` explicitly** (iterate under `Py.GIL()`), or have the thin Python wrapper convert before crossing — and must **fail loud, never silently no-op**, when an argument shape is unrecognized.
+
 #### What "host plumbing" actually is — the five mechanics
 
 "Plumbing" means the Revit-host integration mechanics a window needs to live correctly inside the Revit process — everything *except* how data gets into the controls. It is identical whichever way `{Binding}` resolves, which is exactly why it is separable from (and unconditional relative to) the §9.4 binding bet. In today's `_ipy.py`:
@@ -288,8 +290,23 @@ The first step of the journey. It splits the work along one clean axis and clear
 | **`with` on `IDisposable`** | 4 | modern pythonnet may already cover; verify in-Revit. |
 | **Overload resolution / LINQ `System.Func[…]`** | 1+ | mostly unsurveyed. |
 | **Enum→int not implicit; `super().__init__()`; COM/GAC lost on .NET Core** | unsized | `super()` largely in `forms`; COM is a library-rewrite concern (Excel COM → `openpyxl`). |
+| **.NET-side `object`-typed API seams** (C# receiving Python objects) | 6+ confirmed | The **reverse direction** of every class above, and invisible to the AST checker — the Python call site is idiomatic (`output.print_table(data)`); the defect is C# type-sniffing an `object` param (`value as IEnumerable`) that receives a `PyObject` proxy under pythonnet and silently gets `null`. Confirmed sites in `ScriptOutput.cs`: `print_table`/`print_html_table` (`ToRows`/`ToList`), and the `object attribs` params of `inject_to_head`/`inject_to_body`/`inject_script`/`add_style`. See the known field bug below. Any other snake_case C# API taking `object` needs auditing. |
 
-These are **migration-readiness totals, not active-bug counts** — most extension sites are IronPython-only today, so the bridge bites only when they run under CPython.
+These are **migration-readiness totals, not active-bug counts** — most extension sites are IronPython-only today, so the bridge bites only when they run under CPython. The one exception is the `object`-seam class, which is a **live bug today** for any `#! python3` script:
+
+#### Known field bug: `output.print_table()` silently prints nothing under CPython
+
+Reported in the field: *"if the script is running with CPython, `output.print_table()` has no output; only after removing the `#! python3` line the script works."* Traced and confirmed on this branch:
+
+1. `output.print_table()` (`pyrevitlib/pyrevit/output/__init__.py:525`) is a thin forwarder — it passes the Python `list`-of-`list`s straight to the C# runtime output object.
+2. `ScriptOutput.cs:477` `print_table(object table_data, …)` calls `ToRows(table_data)` and **returns silently** when the result is empty (`if (rows.Count == 0) return;`).
+3. `ToRows` (`ScriptOutput.cs:780`) does `value as IEnumerable`. Under **IronPython** a Python list *is* a CLR `IEnumerable` — the cast succeeds and the table renders. Under **CPython/pythonnet 3** a Python list passed to an `object` parameter is **not converted** — it arrives as a `PyObject` proxy, which does not implement `IEnumerable`; the cast yields `null`, `rows` is empty, and the method returns with no output and no error.
+
+`print_html_table` shares `ToRows` but at least emits a visible "No table_data list" warning; `print_table` fails silently. The `attribs` dict params of the `inject_*`/`add_style` APIs hit the same seam. Typed-parameter APIs (`set_font`, `resize`, …) are unaffected — typed params force pythonnet conversion.
+
+**Fix shape (Phase 1):** add a `PyObject` branch to `ToRows`/`ToList` that iterates the proxy under the GIL (`ScriptOutput.cs` is in the same assembly as `CPythonEngine.cs` and already references `Python.Runtime`), and replace `print_table`'s silent return with the same visible warning `print_html_table` emits. A Python-side conversion in the wrapper would fix only that one path; the C#-side fix protects every caller.
+
+**Why this matters beyond `output`:** this is the one failure mode of the `ScriptOutput` thin-wrapper precedent that the §9.2 forms C# layer is modeled on — see the design rule recorded there. It also corrects this document's earlier framing of `output` as simply "compatible": the *hosting pattern* is proven on every engine, but `object`-typed API seams are engine-divergent and need bridge-aware marshaling.
 
 ---
 
