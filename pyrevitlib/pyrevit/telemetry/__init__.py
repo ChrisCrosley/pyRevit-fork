@@ -79,12 +79,14 @@ def get_telemetry_include_hooks():
 
 
 def set_telemetry_state(state):
-    envvars.set_pyrevit_env_var(envvars.TELEMETRYSTATE_ENVVAR, state)
+    # The runtime unboxes this env value straight to a CLR bool, which throws on
+    # None. An unset config option reads as None, so pin it to a real bool here.
+    envvars.set_pyrevit_env_var(envvars.TELEMETRYSTATE_ENVVAR, bool(state))
     user_config.telemetry_status = state
 
 
 def set_telemetry_utc_timestamp(state):
-    envvars.set_pyrevit_env_var(envvars.TELEMETRYUTCTIMESTAMPS_ENVVAR, state)
+    envvars.set_pyrevit_env_var(envvars.TELEMETRYUTCTIMESTAMPS_ENVVAR, bool(state))
     user_config.telemetry_utc_timestamp = state
 
 
@@ -125,7 +127,7 @@ def set_telemetry_server_url(server_url, persist=True):
 
 
 def set_telemetry_include_hooks(state):
-    envvars.set_pyrevit_env_var(envvars.TELEMETRYINCLUDEHOOKS_ENVVAR, state)
+    envvars.set_pyrevit_env_var(envvars.TELEMETRYINCLUDEHOOKS_ENVVAR, bool(state))
     user_config.telemetry_include_hooks = state
 
 
@@ -146,7 +148,7 @@ def get_apptelemetry_state():
 
 
 def set_apptelemetry_state(state):
-    envvars.set_pyrevit_env_var(envvars.APPTELEMETRYSTATE_ENVVAR, state)
+    envvars.set_pyrevit_env_var(envvars.APPTELEMETRYSTATE_ENVVAR, bool(state))
     user_config.apptelemetry_status = state
 
 
@@ -263,8 +265,7 @@ def setup_telemetry(session_id=None):
     # default file path and name for telemetry
     telemetry_file_dir = user_config.telemetry_file_dir
     # persist=False: this is a startup-time push from user_config to env,
-    # not a value change. Avoids redundant round-trip writes that
-    # previously fed the escape-doubling bug.
+    # not a value change, so it must not write back to the config.
     set_telemetry_file_dir(telemetry_file_dir, persist=False)
 
     # check file telemetry config and setup destination

@@ -9,10 +9,14 @@ from pyrevit.coreutils import envvars
 
 
 def hex_to_brush(color_hex):
-    """Convert hex color to WPF brush."""
-    return Media.SolidColorBrush(
-        Media.ColorConverter.ConvertFromString(color_hex)
-    )
+    """Convert hex color to WPF brush. Tolerates bad config (non-string, malformed)."""
+    try:
+        s = str(color_hex).strip() if color_hex is not None else ''
+        if not s or not s.startswith('#'):
+            s = '#FF808080'
+        return Media.SolidColorBrush(Media.ColorConverter.ConvertFromString(s))
+    except Exception:
+        return Media.SolidColorBrush(Media.ColorConverter.ConvertFromString('#FF808080'))
 
 
 def hex_from_brush(solid_brush):
@@ -45,7 +49,8 @@ def _get_tab_orderrules(tabcfgs, default=False):
         [hex_from_brush(b) for b in types.TabColoringTheme.DefaultBrushes]
     tab_colors = default_colors
     if not default:
-        tab_colors = tabcfgs.get_option('tab_colors', default_colors)
+        raw = tabcfgs.get_option('tab_colors', default_colors)
+        tab_colors = raw if isinstance(raw, list) else default_colors
     return List[types.TabColoringRule](
         [types.TabColoringRule(hex_to_brush(c)) for c in tab_colors]
         )
@@ -58,6 +63,8 @@ def _set_tab_ordercolors(tabcfgs, theme):
 
 def _get_tab_filterrules(tabcfgs):
     tab_filtercolors = tabcfgs.get_option('tab_filtercolors', {})
+    if not isinstance(tab_filtercolors, dict):
+        tab_filtercolors = {}
     return List[types.TabColoringRule](
         [types.TabColoringRule(hex_to_brush(c), f)
          for c, f in tab_filtercolors.items()]
@@ -70,12 +77,24 @@ def _set_tab_filtercolors(tabcfgs, theme):
          for c in theme.TabFilterRules}
 
 
+def _style_at(index, default_index):
+    """Tab coloring style at index, falling back to default_index when index
+    is missing, non-numeric, or out of range."""
+    styles = types.TabColoringTheme.AvailableStyles
+    try:
+        return styles[int(index)]
+    except Exception:  #pylint: disable=broad-except
+        return styles[int(default_index)]
+
+
 def _get_tabstyle(tabcfgs):
     tabstyle_index = tabcfgs.get_option(
         'tabstyle_index',
         types.TabColoringTheme.DefaultTabColoringStyleIndex
         )
-    return types.TabColoringTheme.AvailableStyles[tabstyle_index]
+    return _style_at(
+        tabstyle_index, types.TabColoringTheme.DefaultTabColoringStyleIndex
+        )
 
 
 def _set_tabstyle(tabcfgs, theme):
@@ -88,7 +107,10 @@ def _get_family_tabstyle(tabcfgs):
         'family_tabstyle_index',
         types.TabColoringTheme.DefaultFamilyTabColoringStyleIndex
         )
-    return types.TabColoringTheme.AvailableStyles[family_tabstyle_index]
+    return _style_at(
+        family_tabstyle_index,
+        types.TabColoringTheme.DefaultFamilyTabColoringStyleIndex
+        )
 
 
 def _set_family_tabstyle(tabcfgs, theme):
