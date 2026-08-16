@@ -107,23 +107,23 @@ forms/
 
 ## Phase 3 — Binding prototype gate (R§9.4)  ·  Size 1
 
-**Goal.** Decide the reactive/binding backend before building it — highest risk, smallest effort, do it early. The spike decides *only* the binding backend; the C# window-host plumbing for the modeless tier ships unconditionally either way (R§9.3).
+**Goal.** Answer the migration's riskiest open question before writing any dialog code: **under pythonnet, can WPF's `{Binding}` read properties off plain Python objects at all — and fast enough to use?** (Under IronPython it just works; under pythonnet it is unproven either way, R§8.3.) A small throwaway prototype settles it. Out of scope: the C# window-host plumbing for modeless windows ships regardless of the outcome (R§9.3) — this gate decides only how *data* reaches the controls.
 
-**Key tasks.** A throwaway spike on pyRevit's pythonnet fork:
-1. **Binding fidelity to a Python/`DynamicObject` source** — `SelectFromList.xaml` as the fixture: `{Binding}`, `DataTrigger`s, `DataTemplate`s, validation, `ICollectionView` sort/group.
-2. **Performance on realistic loads** — a ~2,000-item `SelectFromList` and a chatty `ICommand.CanExecute` re-query loop (every call crosses the bridge under the GIL). Correct-but-unusable is a fail.
-3. **A modeless `ProgressBar` driving Revit API calls through `ExternalEvent`** — GIL × Dispatcher × Revit-context (R§8.3.5), on the Phase 1 `__namespace__` pattern.
+**Key tasks.** A throwaway spike on pyRevit's pythonnet fork, testing three things:
+1. **Do bindings resolve?** Point the real `SelectFromList.xaml` at Python-backed list items and check everything it uses today: `{Binding}` lookups, `DataTrigger`s, `DataTemplate`s, validation, `ICollectionView` sort/group. A toy window proves nothing — the shipped XAML is the fixture.
+2. **Are they fast enough?** Every property read from XAML crosses the Python↔.NET bridge and takes the GIL. Measure a ~2,000-item `SelectFromList` (sheet-list scale) and a rapid `ICommand.CanExecute` re-query loop. Correct-but-sluggish counts as a **fail**.
+3. **Does the modeless combination survive?** A `ProgressBar` that stays open while driving Revit API calls through `ExternalEvent` — the mix of Python's GIL, WPF's Dispatcher thread, and Revit's API context most likely to deadlock (R§8.3.5). Reuses the Phase 1 `__namespace__` pattern.
 
 **Depends on.** Phase 1 (`__namespace__`), Phase 2 (structure).
 
-**Exit criteria — a decision, recorded in R§9.4. Pass = fidelity AND performance:**
-- **Both pass** → pure-Python `INotifyPropertyChanged` shim.
-- **Fidelity passes, perf fails** → hybrid: shim for small dialogs; C# `BindableModel`/bindable collections for large-`ItemsSource`/command-heavy ones.
-- **Fidelity fails** → the C# `BindableModel`/`DataTable` adapter (R§9.2).
+**Exit criteria — a decision, recorded in R§9.4, on what powers Phase 4's data-bound dialogs:**
+- **Resolves and fast** → dialogs keep their data in plain Python classes, backed by a small pure-Python `INotifyPropertyChanged` shim. No C# data layer.
+- **Resolves but slow** → hybrid: the Python shim for small dialogs; a C# data model (`BindableModel`/bindable collections) for large lists and command-heavy windows.
+- **Doesn't resolve** → all data-bound dialogs route their data through the C# `BindableModel`/`DataTable` adapter (R§9.2).
 
-Feature modules are untouched in every outcome — the backend seam hides the choice.
+The dialogs' own code is identical in all three outcomes — only the backend behind the `reactive` seam changes.
 
-**Verification.** The spike is the verification; record results, including the perf numbers, in R§9.4.
+**Verification.** The spike is the verification; record results, including the performance numbers, in R§9.4.
 
 ---
 
