@@ -15,7 +15,7 @@ Seven phases, each with **goal · key tasks · critical files · depends-on · e
 
 ---
 
-## Phase 0 — Foundation & harness  ·  Size 3  ·  (draft PR `fix/improve-python3-support`)
+## :white_check_mark: Phase 0 — Foundation & harness  ·  Size 3  ·  (draft PR `fix/improve-python3-support`)
 
 **Goal.** Land the language layer, the first two bridge classes, and the reusable test harness (R§10). Mostly done in the draft PR.
 
@@ -38,12 +38,12 @@ Seven phases, each with **goal · key tasks · critical files · depends-on · e
 **Key tasks.**
 - **Tiered checker rules first:** a `List[T](pylist)` generic-collection classifier (55 sites, tiered 46/7/2) and a `__namespace__`-missing rule (36 sites, 33 missing).
 - **Port the 55 generic-collection sites** (~16 lib first) to explicit `List[T]([...])`; wrap returned .NET collections in `list()` where indexed/mutated.
+- Survey/spot-fix the smaller classes: `IDisposable` `with` (4), `.Item[...]` indexers, enum→int, overload/`System.Func` typing.
+- **Fix the .NET-side `object`-param seams** (R§10.1 field bug — `print_table` silently empty under CPython): `PyObject` branch in `ToRows`/`ToList`, a visible warning instead of the silent return, and an audit of the remaining `object`-typed APIs (`inject_*`/`add_style`). Invisible to the AST checker; covered by the suite.
 - **Settle `__namespace__`** (R§10.1 — question (b) is already settled from source: at the pinned fork commit, re-defining any .NET-derived class collides). Three steps, strictly in order:
   1. **Answer question (a) — which interfaces actually need `__namespace__`.** Test each of the ~6–8 distinct interfaces with and without it, and across a reload, via the DevTools button + parity suite. The resulting matrix is the documented rule.
   2. **Land the reload fix.** Primary: port the #2055 type-cache method into `pyrevitlabs/pythonnet` and re-vendor the DLLs, using Autodesk's shipped implementation as the source — `autodesk-forks/pythonnet@11b56b4` ("DYN-2934: Cache class definitions", branch `dynamo_py3`, includes tests). Interim fallback: the import-guard pattern (R§10.1), *without* Dynamo's random-suffix namespaces.
   3. **Only then apply `__namespace__`** per the rule to the 33 missing sites (lib before ext). Not before the fix lands — deterministic names without a type cache make reload collisions *more* certain.
-- Survey/spot-fix the smaller classes: `IDisposable` `with` (4), `.Item[...]` indexers, enum→int, overload/`System.Func` typing.
-- **Fix the .NET-side `object`-param seams** (R§10.1 field bug — `print_table` silently empty under CPython): `PyObject` branch in `ToRows`/`ToList`, a visible warning instead of the silent return, and an audit of the remaining `object`-typed APIs (`inject_*`/`add_style`). Invisible to the AST checker; covered by the suite.
 
 **Critical files.** `check_py3_compat.py` (new rules), `revit/db/*`, `revit/events.py`, `dev/pyRevitLabs.PyRevit.Runtime/ScriptOutput.cs`, the `pyRevitLabs.Python.Net` submodule (`ClassDerived.cs` is the cherry-pick site) + the re-vendored `dev/libs/{netfx,netcore}/pyRevitLabs.PythonNet.dll`.
 
